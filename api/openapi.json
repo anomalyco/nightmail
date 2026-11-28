@@ -4707,9 +4707,8 @@
         "properties": {
           "from": {
             "type": "string",
-            "maxLength": 254,
-            "pattern": "^[\\x21-\\x7e]+$",
-            "description": "An address at a domain verified in this workspace, or at a subdomain of one. Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
+            "maxLength": 460,
+            "description": "An address at a domain verified in this workspace, or at a subdomain of one — either bare (\"hello@example.com\") or with a display name (\"Example <hello@example.com>\"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
           },
           "fromName": {
             "type": "string",
@@ -4856,6 +4855,22 @@
             },
             "maxItems": 15,
             "description": "Extra MIME headers, 8 KB total. The 15-header limit includes generated headers (two for marketing and any mailbox threading headers). Any name is allowed except headers Nightmail controls: From, Sender, Reply-To, Return-Path, To, Cc, Bcc, Subject, Date, Message-ID, MIME-Version, Content-*, DKIM-*, ARC-*, Authentication-Results, Received*, Resent-*, X-SES-*, List-Unsubscribe*, Auto-Submitted, and reply, receipt, trace and transport headers (Mail-Reply-To, Mail-Followup-To, Followup-To, Disposition-Notification-*, Return-Receipt-To, Errors-To, Bounces-To, Delivered-To, X-Original-To, DomainKey-*, Feedback-ID, TLS-Required, BIMI-*, Autocrypt*, OpenPGP). In-Reply-To and References must be <id@domain> Message-IDs and thread the message in the recipient's mail client."
+          },
+          "unsubscribe": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 1000,
+                "format": "uri",
+                "description": "HTTPS URL for RFC 8058 one-click unsubscribe (POST List-Unsubscribe=One-Click)."
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false,
+            "description": "kind transactional only (422 UNSUBSCRIBE_REQUIRES_TRANSACTIONAL on marketing, where Nightmail manages unsubscribe headers). Writes List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers for apps managing their own notification opt-outs."
           },
           "topicId": {
             "type": "string",
@@ -4961,9 +4976,8 @@
         "properties": {
           "from": {
             "type": "string",
-            "maxLength": 254,
-            "pattern": "^[\\x21-\\x7e]+$",
-            "description": "An address at a domain verified in this workspace, or at a subdomain of one. Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
+            "maxLength": 460,
+            "description": "An address at a domain verified in this workspace, or at a subdomain of one — either bare (\"hello@example.com\") or with a display name (\"Example <hello@example.com>\"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
           },
           "fromName": {
             "type": "string",
@@ -5110,6 +5124,22 @@
             },
             "maxItems": 15,
             "description": "Extra MIME headers, 8 KB total. The 15-header limit includes generated headers (two for marketing and any mailbox threading headers). Any name is allowed except headers Nightmail controls: From, Sender, Reply-To, Return-Path, To, Cc, Bcc, Subject, Date, Message-ID, MIME-Version, Content-*, DKIM-*, ARC-*, Authentication-Results, Received*, Resent-*, X-SES-*, List-Unsubscribe*, Auto-Submitted, and reply, receipt, trace and transport headers (Mail-Reply-To, Mail-Followup-To, Followup-To, Disposition-Notification-*, Return-Receipt-To, Errors-To, Bounces-To, Delivered-To, X-Original-To, DomainKey-*, Feedback-ID, TLS-Required, BIMI-*, Autocrypt*, OpenPGP). In-Reply-To and References must be <id@domain> Message-IDs and thread the message in the recipient's mail client."
+          },
+          "unsubscribe": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 1000,
+                "format": "uri",
+                "description": "HTTPS URL for RFC 8058 one-click unsubscribe (POST List-Unsubscribe=One-Click)."
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false,
+            "description": "kind transactional only (422 UNSUBSCRIBE_REQUIRES_TRANSACTIONAL on marketing, where Nightmail manages unsubscribe headers). Writes List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers for apps managing their own notification opt-outs."
           },
           "topicId": {
             "type": "string",
@@ -5559,6 +5589,14 @@
               "suppressionReason": {
                 "type": "string",
                 "description": "Reason recorded when this send was suppressed. For a multi-recipient send blocked locally, this is the first blocked recipient in To, Cc, Bcc order."
+              },
+              "bounceType": {
+                "type": "string",
+                "description": "A bounce (email.bounced): SES bounceType — Permanent (hard bounce), Transient (soft bounce), Undetermined, or Unknown."
+              },
+              "bounceSubType": {
+                "type": "string",
+                "description": "A bounce (email.bounced): SES bounceSubType, such as General, NoEmail, Suppressed, OnAccountSuppressionList, MailboxFull, MessageTooLarge, ContentRejected, AttachmentRejected, or EmailValidationSuppressed."
               },
               "diagnosticCode": {
                 "type": "string",
@@ -10302,6 +10340,14 @@
               "suppressionReason": {
                 "type": "string",
                 "description": "Reason recorded when this send was suppressed. For a multi-recipient send blocked locally, this is the first blocked recipient in To, Cc, Bcc order."
+              },
+              "bounceType": {
+                "type": "string",
+                "description": "A bounce (email.bounced): SES bounceType — Permanent (hard bounce), Transient (soft bounce), Undetermined, or Unknown."
+              },
+              "bounceSubType": {
+                "type": "string",
+                "description": "A bounce (email.bounced): SES bounceSubType, such as General, NoEmail, Suppressed, OnAccountSuppressionList, MailboxFull, MessageTooLarge, ContentRejected, AttachmentRejected, or EmailValidationSuppressed."
               },
               "diagnosticCode": {
                 "type": "string",
@@ -15098,6 +15144,41 @@
               "count",
               "dns"
             ]
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "active",
+                    "mixed",
+                    "lost",
+                    "failed",
+                    "removed"
+                  ]
+                },
+                "mx": {
+                  "$ref": "#/components/schemas/InboundMxReport"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "status",
+                "mx"
+              ]
+            },
+            "description": "Returned by checkInboundDomain: every receiving host of the domain with its current MX check."
           }
         },
         "required": [
@@ -24936,7 +25017,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Set marketing subscription status, or with topicId the contact's choice about one topic (its sends reach a contact only while marketing consent is subscribed too; each topic change is a contact.subscription_changed event with topicId). Source, policy version, evidence and occurrence time are optional audit context; Nightmail records the actor and current time when omitted. Does not lift delivery suppression. Profile edits cannot establish consent; an import can only when its commit attests consent.",
+        "description": "Set marketing subscription status, or with topicId the contact's choice about one topic (its sends reach a contact only while marketing consent is subscribed too; each topic change is a contact.subscription_changed event with topicId). Look up a contact’s ID by email first with listContacts (GET /v1/contacts?email=<address>). Source, policy version, evidence and occurrence time are optional audit context; Nightmail records the actor and current time when omitted. Does not lift delivery suppression. Profile edits cannot establish consent; an import can only when its commit attests consent.",
         "parameters": [
           {
             "schema": {
@@ -41814,7 +41895,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Create an endpoint for email events. The response includes the signing secret (whsec_…) used for the Webhook-Signature header; store it on your server. Deliveries follow Standard Webhooks: Webhook-Signature is v1,<base64 HMAC-SHA256 of \"{Webhook-Id}.{Webhook-Timestamp}.{raw body}\"> keyed with the base64 bytes after whsec_. Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.",
+        "description": "Create an endpoint for email events. The response includes the signing secret (whsec_…) used for the Webhook-Signature header; store it on your server. Deliveries follow Standard Webhooks: Webhook-Signature is v1,<base64 HMAC-SHA256 of \"{Webhook-Id}.{Webhook-Timestamp}.{raw body}\"> keyed with the base64 bytes after whsec_. Failed deliveries (408, 429, 5xx or network error) are tried up to 10 times with exponential backoff (15 s, 1 min, 4 min, 16 min, 64 min, ~4.3 h, then 12 h between remaining attempts, honoring Retry-After). Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.",
         "requestBody": {
           "required": true,
           "content": {
@@ -60082,7 +60163,7 @@
         ],
         "operationId": "checkInboundDomain",
         "summary": "Check MX records now",
-        "description": "Reads public DNS and reports who currently receives mail for the domain. Updates the receiving status when inbound is enabled. Hosted: also checks every receiving host of the domain again in the background within seconds, and keeps checking a host that waits for its MX for a while; read listReceivingHosts for each host’s status. Never changes DNS or AWS.",
+        "description": "Reads public DNS and reports who currently receives mail for the domain and each of its receiving hosts (hosts[]). Updates the receiving status when inbound is enabled. Hosted: also checks every receiving host of the domain again in the background within seconds, and keeps checking a host that waits for its MX for a while. Never changes DNS or AWS.",
         "parameters": [
           {
             "schema": {

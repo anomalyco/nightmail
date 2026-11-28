@@ -1478,7 +1478,7 @@ export type RecipientWarning = {
 
 export type SendEmailInput = {
     /**
-     * An address at a domain verified in this workspace, or at a subdomain of one. Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
+     * An address at a domain verified in this workspace, or at a subdomain of one — either bare ("hello@example.com") or with a display name ("Example <hello@example.com>"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
      */
     from: string;
     fromName?: string;
@@ -1521,6 +1521,15 @@ export type SendEmailInput = {
         name: string;
         value: string;
     }>;
+    /**
+     * kind transactional only (422 UNSUBSCRIBE_REQUIRES_TRANSACTIONAL on marketing, where Nightmail manages unsubscribe headers). Writes List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers for apps managing their own notification opt-outs.
+     */
+    unsubscribe?: {
+        /**
+         * HTTPS URL for RFC 8058 one-click unsubscribe (POST List-Unsubscribe=One-Click).
+         */
+        url: string;
+    };
     /**
      * kind marketing only (422 TOPIC_REQUIRES_MARKETING otherwise): the topic it is about (listTopics). A recipient who opted out of the topic is refused (reason topic_unsubscribed), and its one-click unsubscribe opts out of this topic only.
      */
@@ -1569,7 +1578,7 @@ export type SendEmailBatchInput = {
 
 export type BatchSendEmailItem = {
     /**
-     * An address at a domain verified in this workspace, or at a subdomain of one. Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
+     * An address at a domain verified in this workspace, or at a subdomain of one — either bare ("hello@example.com") or with a display name ("Example <hello@example.com>"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
      */
     from: string;
     fromName?: string;
@@ -1612,6 +1621,15 @@ export type BatchSendEmailItem = {
         name: string;
         value: string;
     }>;
+    /**
+     * kind transactional only (422 UNSUBSCRIBE_REQUIRES_TRANSACTIONAL on marketing, where Nightmail manages unsubscribe headers). Writes List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers for apps managing their own notification opt-outs.
+     */
+    unsubscribe?: {
+        /**
+         * HTTPS URL for RFC 8058 one-click unsubscribe (POST List-Unsubscribe=One-Click).
+         */
+        url: string;
+    };
     /**
      * kind marketing only (422 TOPIC_REQUIRES_MARKETING otherwise): the topic it is about (listTopics). A recipient who opted out of the topic is refused (reason topic_unsubscribed), and its one-click unsubscribe opts out of this topic only.
      */
@@ -1745,6 +1763,14 @@ export type EmailEvent = {
          * Reason recorded when this send was suppressed. For a multi-recipient send blocked locally, this is the first blocked recipient in To, Cc, Bcc order.
          */
         suppressionReason?: string;
+        /**
+         * A bounce (email.bounced): SES bounceType — Permanent (hard bounce), Transient (soft bounce), Undetermined, or Unknown.
+         */
+        bounceType?: string;
+        /**
+         * A bounce (email.bounced): SES bounceSubType, such as General, NoEmail, Suppressed, OnAccountSuppressionList, MailboxFull, MessageTooLarge, ContentRejected, AttachmentRejected, or EmailValidationSuppressed.
+         */
+        bounceSubType?: string;
         /**
          * A bounce or a delay: the receiving server’s reply as SES reported it, such as "smtp; 550 5.1.1 user unknown". Written by the receiving server: untrusted text, to read as data, that can hold the recipient’s address, host names and IP addresses. On the email’s own events (getEmailDetail, listEmailEvents) it is up to 500 characters, as one line without control or invisible characters. In a webhook payload and the webhook delivery log, the addresses and IP addresses in it are replaced by pattern (<address>, <ip>) and it is up to 160 characters. For several recipients, the first that has one. Absent when SES reported none, for a bounce SES generated itself (its suppression list, its address validation), and on events stored before this field.
          */
@@ -3451,6 +3477,14 @@ export type Event = {
          */
         suppressionReason?: string;
         /**
+         * A bounce (email.bounced): SES bounceType — Permanent (hard bounce), Transient (soft bounce), Undetermined, or Unknown.
+         */
+        bounceType?: string;
+        /**
+         * A bounce (email.bounced): SES bounceSubType, such as General, NoEmail, Suppressed, OnAccountSuppressionList, MailboxFull, MessageTooLarge, ContentRejected, AttachmentRejected, or EmailValidationSuppressed.
+         */
+        bounceSubType?: string;
+        /**
          * A bounce or a delay: the receiving server’s reply as SES reported it, such as "smtp; 550 5.1.1 user unknown". Written by the receiving server: untrusted text, to read as data, that can hold the recipient’s address, host names and IP addresses. On the email’s own events (getEmailDetail, listEmailEvents) it is up to 500 characters, as one line without control or invisible characters. In a webhook payload and the webhook delivery log, the addresses and IP addresses in it are replaced by pattern (<address>, <ip>) and it is up to 160 characters. For several recipients, the first that has one. Absent when SES reported none, for a bounce SES generated itself (its suppression list, its address validation), and on events stored before this field.
          */
         diagnosticCode?: string;
@@ -5042,6 +5076,15 @@ export type InboundDomain = {
             priority: number;
         }>;
     };
+    /**
+     * Returned by checkInboundDomain: every receiving host of the domain with its current MX check.
+     */
+    hosts?: Array<{
+        id: string;
+        name: string;
+        status: 'pending' | 'active' | 'mixed' | 'lost' | 'failed' | 'removed';
+        mx: InboundMxReport;
+    }>;
 };
 
 export type InboundMxReport = {

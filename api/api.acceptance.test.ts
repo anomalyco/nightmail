@@ -23152,6 +23152,19 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
     const topicsOf = async (contact: Json) => Object.fromEntries(ok(await http('GET', `/v1/contacts/${contact.id}`, key.secret)).topics.map((row: Json) => [row.topicId, row.subscribed]));
     const refusedFor = (reply: Reply) => error(reply, 422, 'RECIPIENT_INELIGIBLE').details.map((row: Json) => row.reason);
 
+    // Transactional sends accept "Display Name <addr>" in from and custom RFC 8058 unsubscribe.url (marketing refuses unsubscribe).
+    const baseMail = mail({ to: ana.email });
+    const namedUnsub = ok(await http('POST', '/v1/emails/send', key.secret, { ...baseMail, from: `Acme Alerts <${baseMail.from}>`, unsubscribe: { url: 'https://app.example.invalid/unsub?token=abc' } }), 202);
+    const [namedRow] = (await db.query('SELECT from_address, snapshot FROM sending_emails WHERE id = $1', [namedUnsub.id])).rows;
+    assert.equal(namedRow.from_address, baseMail.from);
+    assert.equal(namedRow.snapshot.fromName, 'Acme Alerts');
+    assert.deepEqual(namedRow.snapshot.headers.filter((h: Json) => /^list-unsubscribe/i.test(h.Name)), [
+      { Name: 'List-Unsubscribe', Value: '<https://app.example.invalid/unsub?token=abc>' },
+      { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
+    ]);
+    error(await http('POST', '/v1/emails/send', key.secret, { ...baseMail, from: `Acme Alerts <${baseMail.from}>`, fromName: 'Other' }), 422);
+    assert.equal(error(await http('POST', '/v1/emails/send', key.secret, mail({ to: ana.email, kind: 'marketing', unsubscribe: { url: 'https://app.example.invalid/unsub' } })), 422, 'UNSUBSCRIBE_REQUIRES_TRANSACTIONAL').field, 'unsubscribe');
+
     // A topic is for marketing, and one the workspace has and hasn't archived: one read for a whole batch.
     assert.equal(error(await http('POST', '/v1/emails/send', key.secret, mail({ to: ana.email, topicId: news.id })), 422, 'TOPIC_REQUIRES_MARKETING').field, 'topicId');
     assert.equal(error(await http('POST', '/v1/emails/batch', key.secret, { emails: [mail({ to: ana.email, kind: 'marketing', topicId: news.id }), mail({ to: ben.email, kind: 'marketing', topicId: 'top_missing' })] }), 422, 'TOPIC_NOT_FOUND').field, 'emails.1.topicId');
@@ -29695,7 +29708,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         assert.deepEqual(await states(), { [`reply.${name}`]: 'active', [name]: 'active' });
         // The inbound check and Check now queue the same check of every host.
         await db.query("UPDATE jobs SET status='completed',payload=payload-'follow' WHERE id=$1", ['domain.mx:' + d.token]);
-        ok(await local('POST', `/v1/inbound/domains/${d.id}/check`));
+        const checked = ok(await local('POST', `/v1/inbound/domains/${d.id}/check`));
+        assert.deepEqual(checked.hosts.map((h: Json) => [h.name, h.status, h.mx?.state]).sort(), [[name, 'active', 'active'], [`reply.${name}`, 'active', 'active']]);
         assert.deepEqual([(await job()).status, (await job()).payload.follow], ['pending', 0], 'checkInboundDomain checks every host.');
         await db.query("UPDATE jobs SET status='completed',payload=payload-'follow' WHERE id=$1", ['domain.mx:' + d.token]);
         ok(await local('POST', `/v1/domains/${d.id}/verify`));

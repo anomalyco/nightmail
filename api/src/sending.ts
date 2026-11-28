@@ -33,7 +33,7 @@ import { CustomHeaders } from './custom-headers.js';
 import { EmailThread, joinReplies, mailboxMail, sentThreadId, threadBlock, threadView, type RawThread } from './thread-view.js';
 import { assertTopics, topicAllows, topicRule, type TopicRule } from './topics.js';
 import { attachmentLinks, attachments, campaignReviews, campaigns, emailEvents, emails, type CampaignStatsGroup, type StoredCampaignStats, type CampaignDraft, type EmailSnapshot, type EmailStatus, type ReviewedRecipient } from './db/sending.js';
-import { decodedDisplayName, AttachmentMetadata, AttachmentUpload, decodeBase64, fileTooLarge, invalidMetadataFields, mailAddress, MAX_ATTACHMENT_BYTES, MAX_JSON_ATTACHMENT_BYTES, metadataInvalid, mib, quoted, sizeText, postalAddressOf, postalAddressRequired, senderDisplayName, unsubscribePageLink, unsubscribePageUrl, validateAttachment, validMailAddressSql, type AttachmentMetadataInput } from './outbound-content.js';
+import { decodedDisplayName, AttachmentMetadata, AttachmentUpload, decodeBase64, fileTooLarge, invalidMetadataFields, mailAddress, MAX_ATTACHMENT_BYTES, MAX_JSON_ATTACHMENT_BYTES, metadataInvalid, mib, parseSenderAddress, quoted, sizeText, postalAddressOf, postalAddressRequired, senderDisplayName, transactionalUnsubscribeUrl, unsubscribePageLink, unsubscribePageUrl, validateAttachment, validMailAddressSql, type AttachmentMetadataInput } from './outbound-content.js';
 import { foundLinkOrigin, linkAllowance, linkChoice, linkChoices, linkOrigin, linkReview, recordLinkUse } from './link-domains.js';
 import { clients, type Client } from './email-preview/support.js';
 import { CheckInput, CheckResult, splitMailbox, type CheckMail } from './sendability-schema.js';
@@ -129,19 +129,31 @@ const AttachmentIds = z.array(z.string().min(1).max(120)).max(SEND_LIMITS.attach
 const ATTACHMENT_NOTE = `Attachments: ${ATTACHMENT_LIMITS_TEXT} ${ATTACHMENT_RULES_TEXT} ${ATTACHMENT_REFUSALS_TEXT}`;
 const TopicId = z.string().min(1).max(120);
 const ContentFields = { subject: Subject.optional(), html: z.string().min(1).max(MAX_BODY).optional(), text: z.string().min(1).max(MAX_BODY).optional() };
+const SendFrom = z.string().max(460).refine(v => parseSenderAddress(v) !== null, 'Use an email address or "Name <address>", or set fromName separately.');
+const TransactionalUnsubscribe = z.object({
+  url: transactionalUnsubscribeUrl().describe('HTTPS URL for RFC 8058 one-click unsubscribe (POST List-Unsubscribe=One-Click).'),
+}).strict().describe(`kind transactional only (422 UNSUBSCRIBE_REQUIRES_TRANSACTIONAL on marketing, where ${productName} manages unsubscribe headers). Writes List-Unsubscribe and List-Unsubscribe-Post: List-Unsubscribe=One-Click headers for apps managing their own notification opt-outs.`);
 const SendInput = z.object({
-  from: Address.describe('An address at a domain verified in this workspace, or at a subdomain of one. Hosted: also any address at the workspace\u2019s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.'), fromName: FromName.optional(), to: z.union([Address, z.array(Address).min(1).max(50)]), cc: z.array(Address).max(49).default([]), bcc: z.array(Address).max(49).default([]), replyTo: z.array(Address).max(10).default([]),
+  from: SendFrom.describe('An address at a domain verified in this workspace, or at a subdomain of one — either bare ("hello@example.com") or with a display name ("Example <hello@example.com>"; or set fromName separately). Hosted: also any address at the workspace\u2019s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.'), fromName: FromName.optional(), to: z.union([Address, z.array(Address).min(1).max(50)]), cc: z.array(Address).max(49).default([]), bcc: z.array(Address).max(49).default([]), replyTo: z.array(Address).max(10).default([]),
   region: Region.optional().describe(`Usually omitted: hosted ${productName} sends from the region bound to the sender domain, and a different value fails with SENDER_REGION_MISMATCH. Self-hosted installations default to their default region.`), kind: z.enum(['transactional', 'marketing']).default('transactional').describe(`marketing adds ${productName}'s footer (an Unsubscribe link, with the workspace's postal address under it when it has one) and the one-click List-Unsubscribe headers.`), ...ContentFields,
   template: z.object({ name: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/), data: StoredTemplateData }).strict().describe('Uses native SES stored-template rendering and snapshots its rendered MIME. SES does not automatically escape HTML; callers must escape untrusted HTML-context values. Simulated deployments do not render AWS templates.').optional(),
   attachments: AttachmentIds, tracking: z.boolean().optional(), headers: CustomHeaders.optional(),
+  unsubscribe: TransactionalUnsubscribe.optional(),
   topicId: TopicId.optional().describe('kind marketing only (422 TOPIC_REQUIRES_MARKETING otherwise): the topic it is about (listTopics). A recipient who opted out of the topic is refused (reason topic_unsubscribed), and its one-click unsubscribe opts out of this topic only.'),
   screen: z.boolean().optional().describe('Request outbound harm screening at accept time for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Simulated mail is not screened. A positive reject verdict fails the request synchronously with 422 CONTENT_REJECTED_SPAM (nothing queued); during a temporary outage of both classifiers, the message is accepted (202) and held unscreened until a classifier answers. Mandatory Hosted screening with no classifier configured returns retryable 503 CONTENT_SCREEN_UNAVAILABLE with Retry-After.'),
 }).strict().superRefine((v, ctx) => {
+  const parsed = parseSenderAddress(v.from);
+  if (parsed?.name && v.fromName !== undefined && parsed.name !== v.fromName) ctx.addIssue({ code: 'custom', path: ['fromName'], message: 'Supply the sender display name in either from or fromName, not both.' });
   if (v.template ? (v.subject !== undefined || v.html !== undefined || v.text !== undefined) : (!v.subject || (!v.html && !v.text))) ctx.addIssue({ code: 'custom', message: 'Provide subject and html/text, or template, but not both.' });
   if ((Array.isArray(v.to) ? v.to.length : 1) + v.cc.length + v.bcc.length > 50) ctx.addIssue({ code: 'custom', message: 'At most 50 recipients across to/cc/bcc.' });
   if (v.kind === 'marketing' && ((Array.isArray(v.to) ? v.to.length : 1) !== 1 || v.cc.length || v.bcc.length)) ctx.addIssue({ code: 'custom', message: 'Marketing messages require exactly one To recipient and no Cc/Bcc.' });
   if (v.template && (v.attachments.length || v.kind === 'marketing')) ctx.addIssue({ code: 'custom', message: 'Stored templates currently support transactional messages without attachments only.' });
 }).openapi('BatchSendEmailItem');
+function normalizeSender<T extends { from: string; fromName?: string }>(mail: T): T {
+  const parsed = parseSenderAddress(mail.from);
+  if (!parsed || parsed.address === mail.from) return mail;
+  return { ...mail, from: parsed.address, ...(mail.fromName === undefined && parsed.name ? { fromName: parsed.name } : {}) };
+}
 // The screen's limits (src/screen.ts), as the API reference states them; the defaults of JEV_MESSAGE_LIMIT_BYTES and JEV_CAMPAIGN_LIMIT_BYTES.
 const screenBytes = (n: number) => n.toLocaleString('en-US'), SCREEN = SEND_LIMITS.screen;
 const RAMP_NOTE = `Marketing ramp: on Hosted sending, a workspace still ramping up (a new sender, exempt and first-party ones included) sends kind: marketing at most its ramp step's hourly ceiling (${RAMP.steps.map(x => x.ceilingPerHour.toLocaleString('en-US')).join(', ')} recipients an hour), shared with its campaigns. A send that would cross it is refused with nothing queued (a batch as a whole): retryable 429 RAMP_LIMIT_REACHED, with Retry-After (seconds until more room opens) and error.details[0] holding { step, steps, ceilingPerHour, usedThisHour, fitsNow, requested, stepOpensAt }. A scheduled marketing send is refused the same way when it is scheduled if it is larger than the step's whole ceiling, or if with the marketing already scheduled within 24 hours either side of its time it is more than the step sends in 24 hours (error.details[0] adds { scheduledBacklog, dailyBudget }); one that fits is held at its time until its hour has room (it stays scheduled, scheduledAt moving to when it tries again, with a dispatch_deferred event), never rejected for the ramp. While the workspace ramps and a campaign of it is stopped by the automatic pause, the list probe or the ramp's check (LIST_QUALITY, BOUNCE_RATE_HIGH, COMPLAINT_RATE_HIGH) and not resumed or canceled, marketing sends and schedules are refused with 409 RAMP_PAUSED (not retryable; error.details[0] holds { campaignId, pauseCode }): review and resume that campaign first. For a large list, send a campaign instead: campaigns are paced automatically. Transactional mail is never ramped or paused by it.`;
@@ -1380,7 +1392,8 @@ function footerParts(parts: { html?: string; text?: string }, url: string, { uns
   parts.text = (parts.text ?? '') + '\n\n' + [...link ? [`Unsubscribe: ${link}`] : [], ...lines].join('\n');
 }
 function structuredSnapshot(input:SendRequest & {region:string}):EmailSnapshot {
-  return { testCampaignId: null, untrustedContent: !!input.headers?.some(h => h.name.toLowerCase() === 'in-reply-to'), from: input.from, ...(input.fromName !== undefined ? { fromName: input.fromName } : {}), to: Array.isArray(input.to) ? input.to : [input.to], cc: input.cc, bcc: input.bcc, replyTo: input.replyTo, region: input.region, kind: input.kind, subject: input.subject ?? '', html: input.html, text: input.text, attachments: input.attachments, tracking: input.tracking ?? input.kind === 'marketing', headers: (input.headers ?? []).map(header => ({ Name: header.name, Value: header.value })), ...(input.screen && input.kind === 'transactional' ? { screen: true } : {}), ...(input.topicId && input.kind === 'marketing' ? { topicId: input.topicId } : {}) };
+  const unsubHeaders = input.unsubscribe && input.kind === 'transactional' ? [{ Name: 'List-Unsubscribe', Value: `<${input.unsubscribe.url}>` }, { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' }] : [];
+  return { testCampaignId: null, untrustedContent: !!input.headers?.some(h => h.name.toLowerCase() === 'in-reply-to'), from: input.from, ...(input.fromName !== undefined ? { fromName: input.fromName } : {}), to: Array.isArray(input.to) ? input.to : [input.to], cc: input.cc, bcc: input.bcc, replyTo: input.replyTo, region: input.region, kind: input.kind, subject: input.subject ?? '', html: input.html, text: input.text, attachments: input.attachments, tracking: input.tracking ?? input.kind === 'marketing', headers: [...(input.headers ?? []).map(header => ({ Name: header.name, Value: header.value })), ...unsubHeaders], ...(input.screen && input.kind === 'transactional' ? { screen: true } : {}), ...(input.topicId && input.kind === 'marketing' ? { topicId: input.topicId } : {}) };
 }
 // The dispatcher screens Hosted shared mail on a live installation with a classifier (dispatcher.ts prepareMail).
 // Admission measures what that screen would read and refuses, with the numbers, what it would refuse, instead of
@@ -2004,7 +2017,7 @@ async function renderTemplates(runtime: Runtime, a: Actor, out: Outgoing[], batc
 }
 /** POST /v1/emails/send and /batch after authentication, the dashboard's test email and the platform's notices. */
 async function admitEmails(call: SendCall, a: Actor, input: SendRequest | { emails: SendRequest[] }, scheduledAt?: string, sealed = false, platformTestTo?: string) {
-  const batch = 'emails' in input, mails = batch ? input.emails : [input];
+  const batch = 'emails' in input, mails = (batch ? input.emails : [input]).map(normalizeSender);
   await assertBuiltinStillSends(call.runtime, call.db ?? call.runtime.db, a.workspaceId, mails.map(m => m.from), batch);
   assertBuiltinInput(call.runtime.config, mails.map(m => ({ ...m, scheduledAt })), batch);
   await assertBuiltinRecipients(call.runtime, call.db ?? call.runtime.db, a.workspaceId, mails.map(m => ({ from: m.from, recipients: [...(Array.isArray(m.to) ? m.to : [m.to]), ...m.cc, ...m.bcc] })), batch);
@@ -2013,6 +2026,8 @@ async function admitEmails(call: SendCall, a: Actor, input: SendRequest | { emai
   const at = (i: number, field: string) => batch ? `emails.${i}.${field}` : field;
   const plain = mails.findIndex(m => m.topicId && m.kind !== 'marketing');
   if (plain >= 0) throw new ApiError(422, 'TOPIC_REQUIRES_MARKETING', 'A topic is for marketing mail (kind: marketing): transactional mail has no unsubscribe.', at(plain, 'topicId'));
+  const mktUnsub = mails.findIndex(m => m.unsubscribe && m.kind !== 'transactional');
+  if (mktUnsub >= 0) throw new ApiError(422, 'UNSUBSCRIBE_REQUIRES_TRANSACTIONAL', `Marketing mail already includes ${productName}\u2019s one-click unsubscribe headers; use unsubscribe only on kind: transactional.`, at(mktUnsub, 'unsubscribe'));
   await assertTopics(call.db ?? call.runtime.db, a.workspaceId, mails.map(m => m.topicId), i => at(i, 'topicId'));
   // Marketing mail's footer carries the workspace's postal address when it has one. Unlike a campaign, a marketing send
   // without one is not refused: its caller writes the whole message and may include the address itself.
@@ -2445,7 +2460,7 @@ export function registerSending(app: App) {
     return c.json(await advisoryCheck(c.env, a, mail, mail === input ? 'draft' : 'email'), 200);
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/emails/send', operationId: 'sendEmail', description: `${SCREEN_LIMIT_NOTE} ${RAMP_NOTE} ${BUILTIN_NOTE} ${ATTACHMENT_NOTE}`, tags: ['Emails'], security, request: { headers: SendIdempotencyHeaders, body: json(SingleSendInput) }, responses: { 202: response(SingleReceipt), ...errors } }), async c => {
-    const a = actor(c, 'send'); const input = c.req.valid('json');
+    const a = actor(c, 'send'); const input = normalizeSender(c.req.valid('json'));
     const replyAddressId = input.replyAddressId ?? input.replyMailboxId;
     if (replyAddressId) {
       if (a.domains.length || !a.permissions.includes('manage')) throw denied('MAILBOX_ACCESS_REQUIRED', 'Use manage permission on all domains, or start the thread with a key limited to that address.', { permission: 'sendEmail', level: 'on', scope: `address:${replyAddressId}` });
