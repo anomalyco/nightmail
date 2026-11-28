@@ -1,7 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, databaseCodeOf, errors, log, logError, response, security, transientDatabaseError, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
-import { ABUSE, CAMPAIGNS, DATABASE, DLQ, JOBS, JOBS_LATE, QUEUE, QUEUES, REQUESTS, SQLSTATES, SUPPORT_AI, TICK, WAKE_QUEUES } from './health-thresholds.js';
+import { ABUSE, CAMPAIGNS, DATABASE, DIRECT_MAIL, DLQ, JOBS, JOBS_LATE, QUEUE, QUEUES, REQUESTS, SQLSTATES, SUPPORT_AI, TICK, WAKE_QUEUES } from './health-thresholds.js';
 import { countDatabaseError, LATENCY_BUCKETS, WRITE_LIMITS } from './health-counters.js';
 import { slackCard, supportCostAlert } from './operator-alerts.js';
 import { aiCostToday } from './support-ai-cost.js';
@@ -30,7 +30,7 @@ const slack: HealthPost = (url, card) => postSlack(url, card, 'HEALTH_ALERT_FAIL
 
 type Severity = 'critical' | 'warning';
 /** Which probe an alert's condition is read from: an alert neither opens nor clears on a tick whose probe failed. */
-type Section = 'queues' | 'jobs' | 'campaigns' | 'requests' | 'database' | 'ses';
+type Section = 'queues' | 'jobs' | 'mail' | 'campaigns' | 'requests' | 'database' | 'ses';
 // critical: customers' mail or requests are affected now. warning: it will be, or it needs a look today.
 // The kind is the first part of every key and its section in docs/operations.md; unit says what the alert's value counts.
 const KINDS = {
@@ -46,6 +46,7 @@ const KINDS = {
   'dead-letters': { emoji: ':warning:', label: 'Dead letters', severity: 'critical', unit: 'messages', section: 'queues' },
   'jobs-behind': { emoji: ':hourglass_flowing_sand:', label: 'Jobs behind', severity: 'critical', unit: 'seconds', section: 'jobs' },
   'jobs-failed': { emoji: ':x:', label: 'Jobs failed', severity: 'warning', unit: 'jobs', section: 'jobs' },
+  'mail-behind': { emoji: ':hourglass_flowing_sand:', label: 'Mail behind', severity: 'critical', unit: 'seconds', section: 'mail' },
   'campaign-slow': { emoji: ':snail:', label: 'Campaign slow', severity: 'warning', unit: 'per_second', section: 'campaigns' },
   'campaign-long': { emoji: ':clock3:', label: 'Campaign long', severity: 'warning', unit: 'seconds', section: 'campaigns' },
   'campaign-preparing': { emoji: ':hourglass:', label: 'Campaign preparing', severity: 'warning', unit: 'seconds', section: 'campaigns' },
@@ -96,6 +97,8 @@ const code = (text: string) => '`' + text + '`';
 const id = (value: unknown) => code(safe(value));
 
 type Late = { class: string; type: string; pending: number; oldestSeconds: number };
+/** Direct mail queued and due: how many (of the oldest DIRECT_MAIL.read) and how long the oldest has waited. */
+type DirectMail = { due: number; oldestSeconds: number };
 /** Failed jobs of one type with one error: how many are kept (of the newest JOBS.read), and how many failed in the last hour and half hour. */
 type Failed = { type: string; error: string; failed: number; hour: number; half: number };
 type CampaignRow = { id: string; workspaceId: string; state: string; total: number; prepared: number; expanded: number; canceled: number; paced: boolean; rateShare: number | null; waitingReason: string | null; waitingSeconds: number | null;
@@ -110,7 +113,7 @@ type Database = { heldDomains?: string[]; /** What the support AI cost since UTC
   /** Sample runs in a row that set no marks: a session it can't see the start of held the write lock on sent-mail events, or the check failed. */ abuseSampleHeld?: number | null;
   /** Seconds since the oldest outstanding observation or due time, by stage. */ abuseBehind?: Record<string, number | null> | null; connections: number; maxConnections: number; longTransactions: number; oldestTransactionSeconds: number; slowQueries: number; lockWaits: number; sizeBytes: number };
 /** What one tick measured. A probe that failed is null: unknown, which is not the same as fine. */
-export type Sample = { queues: QueueSample[]; late: Late[] | null; failed: Failed[] | null; campaigns: CampaignRow[] | null; counters: CounterRow[] | null; database: Database | null };
+export type Sample = { queues: QueueSample[]; late: Late[] | null; failed: Failed[] | null; directMail?: DirectMail | null; campaigns: CampaignRow[] | null; counters: CounterRow[] | null; database: Database | null };
 /**
  * What the next tick compares with: how many ticks each condition has held, and each sending campaign's minute samples
  * (when, released, accepted).
@@ -137,7 +140,10 @@ const Health = z.object({
   generatedAt: z.string().nullable().describe('When the last tick finished. Null: none has run yet.'), stale: z.boolean().describe('True when no tick finished in the last three minutes: the figures are old and the tick itself needs looking at.'),
   delivery: z.enum(['slack', 'off']).describe('off: no Slack webhook is configured, so alerts are only listed here.'),
   alerts: z.array(Alert).describe('The alerts that are open, oldest first.'),
-  queues: z.array(Queue), jobs: z.array(Jobs).nullable(), campaigns: z.array(Campaign).nullable(),
+  queues: z.array(Queue), jobs: z.array(Jobs).nullable(),
+  directMail: z.object({ due: z.number().int().describe('Due now; at most 5,000 are read.'), oldestSeconds: z.number().int(), behind: z.boolean() }).nullable().optional()
+    .describe('Mail sent through the API (not campaign copies) that is queued and due: how many and how long the oldest has waited. Null: the probe failed.'),
+  campaigns: z.array(Campaign).nullable(),
   feedbackLagSeconds: z.number().int().nullable().describe('How far behind bounces, complaints and deliveries are applied: the older of the feedback queues’ oldest message and the oldest due feedback job.'),
   routes: z.array(Route).nullable().describe('The last 15 minutes: every route that is behind, then the slowest by p95.'),
   errors: z.array(z.object({ kind: z.enum(['code', 'sqlstate', 'error']), code: z.string(), count: z.number().int() })).nullable().describe('The last 15 minutes: error codes of 5xx responses (code), database errors by SQLSTATE (sqlstate) and error-level log lines by code (error).'),
@@ -220,6 +226,14 @@ export function evaluate(sample: Sample, memory: Memory, now: number, diskBytes:
     }
     jobs = [...types.values()].map(({ top: _, half: __, first: ___, ...row }) => row).sort((a, b) => Number(b.behind) - Number(a.behind) || b.oldestSeconds - a.oldestSeconds || b.failedLastHour - a.failedLastHour || b.failed - a.failed);
   } else blind.add('jobs');
+
+  let directMail: Rollup['directMail'] = null;
+  if (sample.directMail) {
+    const { due, oldestSeconds } = sample.directMail;
+    const severity = ageSeverity('mail-behind', due > 0 ? oldestSeconds : 0, DIRECT_MAIL, DIRECT_MAIL.sustain);
+    if (severity) find('mail-behind', null, oldestSeconds, `${count(due)}${due >= DIRECT_MAIL.read ? '+' : ''} due, oldest ${span(oldestSeconds)}.`, DIRECT_MAIL.remindMinutes, severity);
+    directMail = { due, oldestSeconds, behind: behind.has('mail-behind') };
+  } else if (sample.directMail === null) blind.add('mail');
 
   const feedbackQueue = sample.queues.filter(q => q.name === 'feedback' || q.name === 'feedback-priority').map(q => Math.round(q.oldestMs / 1000));
   const feedbackJobs = sample.late?.filter(late => late.class === 'feedback').map(late => late.oldestSeconds) ?? [];
@@ -349,7 +363,7 @@ export function evaluate(sample: Sample, memory: Memory, now: number, diskBytes:
   for (const [key, n] of Object.entries(memory.streaks)) if (!(key in streaks) && blind.has(sectionOf(key))) streaks[key] = n;
   // Critical before warning, each in the order it was measured: what a tick posts first, and what a reader sees first.
   findings.sort((a, b) => Number(b.severity === 'critical') - Number(a.severity === 'critical'));
-  return { rollup: { queues, jobs, campaigns, feedbackLagSeconds, routes, errors: errorCodes, requests, database, memory: { streaks, campaigns: samples } }, findings, blind };
+  return { rollup: { queues, jobs, directMail, campaigns, feedbackLagSeconds, routes, errors: errorCodes, requests, database, memory: { streaks, campaigns: samples } }, findings, blind };
 }
 
 /** Everything the tick asks the database runs in a short transaction of its own under WRITE_LIMITS: a second for a lock, three to run. */
@@ -365,7 +379,7 @@ async function probe<T>(db: Runtime['db'], name: string, read: (tx: DbExecutor) 
 }
 const due = sql`CASE WHEN j.status='running' THEN j.lease_until ELSE j.available_at END`;
 /** The reads of a tick, PROBES of them. Each is bounded by an index and a LIMIT (jobs, campaigns) or by a small table. */
-const PROBES = 5;
+const PROBES = 6;
 async function measure(runtime: Pick<Runtime, 'db' | 'config'>, queues: QueueSample[]): Promise<Sample> {
   const { db, config } = runtime;
   // The due head of each job class through jobs_ready_page, at most JOBS.read rows a class.
@@ -377,6 +391,10 @@ async function measure(runtime: Pick<Runtime, 'db' | 'config'>, queues: QueueSam
   const failed = await probe(db, 'jobs_failed', async tx => (await tx.execute<Failed>(sql`SELECT type,coalesce(last_error,'') AS error,count(*)::int AS failed,
       count(*) FILTER (WHERE available_at>now()-make_interval(mins=>${JOBS.failedHourMinutes}))::int AS hour,count(*) FILTER (WHERE available_at>now()-make_interval(mins=>${JOBS.failedWindowMinutes}))::int AS half
     FROM (SELECT type,last_error,available_at FROM jobs WHERE status='failed' ORDER BY available_at DESC LIMIT ${JOBS.read}) f GROUP BY 1,2`)).rows);
+  // Direct mail that is due, oldest first, through sending_emails_direct_due (migration 594).
+  const directMail = await probe(db, 'direct_mail', async tx => (await tx.execute<DirectMail>(sql`SELECT count(*)::int AS due,coalesce(greatest(0,extract(epoch FROM now()-min(d.due))),0)::int AS "oldestSeconds"
+    FROM (SELECT coalesce(scheduled_at,created_at) AS due FROM sending_emails WHERE status='queued' AND campaign_id IS NULL AND coalesce(scheduled_at,created_at)<=now()
+      ORDER BY coalesce(scheduled_at,created_at) LIMIT ${DIRECT_MAIL.read}) d`)).rows[0] ?? null);
   // Campaigns that are preparing or sending, and those paused in the last day, through sending_campaigns_running. The
   // account's rate comes from the account (provider_account_limits; a self-hosted installation's own limits), and the
   // workspace's kind from its connection: never from the view the release planner reads, which is selected only to be
@@ -416,7 +434,7 @@ async function measure(runtime: Pick<Runtime, 'db' | 'config'>, queues: QueueSam
       coalesce((SELECT extract(epoch FROM now()-min(xact_start)) FROM ${activity}),0)::int AS "oldestTransactionSeconds",
       (SELECT count(*) FROM ${activity} AND state='active' AND query_start<now()-interval '30 seconds')::int AS "slowQueries",
       (SELECT count(*) FROM ${activity} AND wait_event_type='Lock')::int AS "lockWaits",pg_database_size(current_database())::float8 AS "sizeBytes"`)).rows[0] ?? null);
-  return { queues, late, failed, campaigns, counters, database };
+  return { queues, late, failed, directMail, campaigns, counters, database };
 }
 
 const runbookOf = (kind: Kind) => `docs/operations.md#${KINDS[kind].section === 'ses' ? 'ses-capacity' : kind}`;
@@ -428,6 +446,7 @@ function openLine(f: Finding) {
     case 'queue-behind': return `${queueLabel(f.key)} are ${span(f.value)} behind`;
     case 'dead-letters': return `${subject} has ${count(f.value)} ${f.value === 1 ? 'message' : 'messages'} to recover`;
     case 'jobs-behind': return `${subject} jobs are ${span(f.value)} behind`;
+    case 'mail-behind': return `Direct mail is ${span(f.value)} behind`;
     case 'jobs-failed': return `${count(f.value)} ${subject} ${f.value === 1 ? 'job failed' : 'jobs failed'} in the last hour`;
     case 'campaign-slow': return `Campaign ${subject} has stopped releasing mail`;
     case 'campaign-bounces': return `Campaign ${f.words.replaceAll('`', '')}`;

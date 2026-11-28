@@ -141,7 +141,9 @@ pub struct Api {
     revoked: Mutex<Revocations>,
     gates: Mutex<HashMap<String, Gate>>,
     views: Arc<tokio::sync::Semaphore>,
+    /// API calls this task makes at once: `heavy` for large responses and submissions, `light` for the rest.
     heavy: Arc<tokio::sync::Semaphore>,
+    light: Arc<tokio::sync::Semaphore>,
     /// KiB of message bodies held at once on this task, while FETCH and SEARCH read them.
     bodies: Arc<tokio::sync::Semaphore>,
     pub online: std::sync::atomic::AtomicBool,
@@ -173,6 +175,7 @@ impl Api {
             views: Arc::new(tokio::sync::Semaphore::new(512 * 1024)),
             bodies: Arc::new(tokio::sync::Semaphore::new(256 * 1024)),
             heavy: Arc::new(tokio::sync::Semaphore::new(64)),
+            light: Arc::new(tokio::sync::Semaphore::new(64)),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
                 .redirect(reqwest::redirect::Policy::none())
@@ -189,8 +192,9 @@ impl Api {
     fn call_before(&self, p: Value, deadline: Option<Instant>) -> Result<Vec<u8>, u16> {
         self.call_coded(p, deadline).map_err(|(status, _)| status)
     }
-    /// A credential's call waits for its call rate, and a heavy one (a large response or a submission) for a slot of
-    /// the task's and the credential's lanes.
+    /// A credential's call waits for its call rate, then for a slot of the credential's lanes and of the task: a heavy
+    /// one (a large response or a submission) of the task's heavy calls, any other (a STORE, COPY, EXPUNGE, STATUS or
+    /// folder edit) of its light ones, so no credential can drive unbounded concurrent calls into the API.
     fn admit(
         &self,
         kid: Option<&str>,
@@ -215,14 +219,16 @@ impl Api {
                 }
             }
         }
-        if !heavy {
-            return Ok(None);
-        }
+        let Some(lanes) = inbox_work else {
+            // Only a sign-in has no credential yet; it is admitted by Limits::signin.
+            return if heavy { Err(403) } else { Ok(None) };
+        };
+        let global = if heavy { &self.heavy } else { &self.light };
         Ok(Some(
             tokio::runtime::Handle::current()
                 .block_on(crate::admission::Reservation::take(
-                    self.heavy.clone(),
-                    Some(inbox_work.ok_or(403u16)?),
+                    global.clone(),
+                    Some(lanes),
                     1,
                 ))
                 .ok_or(429u16)?,
@@ -387,7 +393,7 @@ impl Api {
 }
 /// How long an upload to the API (an APPEND or an SMTP submission, up to 40 MiB) may take.
 const UPLOAD: Duration = Duration::from_secs(120);
-/// What one command (a FETCH, SEARCH or SELECT, each batch of a large change) may spend on API calls.
+/// What one command (a FETCH, SEARCH or SELECT, or a large change in all its batches) may spend on API calls.
 pub const COMMAND: Duration = Duration::from_secs(60);
 /// What the view reserves for each message of an open folder, besides its flags.
 const ENTRY: usize = 200;
@@ -644,7 +650,7 @@ impl Store {
                     .find(|g| g.account == p.account && (sponsored || g.workspace == p.workspace))
                     .map(|g| g.lanes.0[3].clone())
                     .unwrap_or_else(|| {
-                        let share = crate::admission::Shares::new(32, 16, 16, 144);
+                        let share = crate::admission::Shares::new(32, 16, 16, 144, 128);
                         Arc::new(if sponsored {
                             share.with_sessions(tenant)
                         } else {
@@ -657,17 +663,18 @@ impl Store {
                     .map(|g| g.lanes.0[2].clone())
                     .unwrap_or_else(|| {
                         Arc::new(
-                            crate::admission::Shares::new(32, 16, 16, 144).with_sessions(tenant),
+                            crate::admission::Shares::new(32, 16, 16, 144, 128)
+                                .with_sessions(tenant),
                         )
                     });
                 let inbox_share = gates
                     .values()
                     .find(|g| g.inbox == p.inbox)
                     .map(|g| g.lanes.0[1].clone())
-                    .unwrap_or_else(|| Arc::new(crate::admission::Shares::new(16, 8, 8, 136)));
+                    .unwrap_or_else(|| Arc::new(crate::admission::Shares::new(16, 8, 8, 136, 96)));
                 let g = Gate {
                     lanes: crate::admission::Lanes([
-                        Arc::new(crate::admission::Shares::new(16, 8, 8, 128)),
+                        Arc::new(crate::admission::Shares::new(16, 8, 8, 128, 64)),
                         inbox_share,
                         workspace_share,
                         account_share,
@@ -1229,15 +1236,14 @@ impl MailStore for Store {
             e.raw = raw.clone();
             return Ok(e);
         }
-        // One body at a time per command, out of the task's budget for bodies; the previous one is let go first.
+        // One body at a time per command, out of the task's and each lane's budget for bodies; the previous one is let go first.
         drop(self.body_permit.borrow_mut().take());
-        let permit = tokio::runtime::Handle::current()
-            .block_on(crate::admission::Reservation::take(
-                self.api.bodies.clone(),
-                None,
-                u32::try_from(e.size.div_ceil(1024).max(1)).map_err(|_| store::Error::Limit)?,
-            ))
-            .ok_or(store::Error::Limit)?;
+        let permit = body_reservation(
+            self.api.bodies.clone(),
+            self.lanes.pools(|s| &s.bodies),
+            e.size,
+            crate::admission::WAIT,
+        )?;
         *self.body_permit.borrow_mut() = Some(permit);
         let raw = self
             .api
@@ -1351,6 +1357,10 @@ impl MailStore for Store {
             }
             Change::Append { date, flags, .. } => {
                 if let Some(mut upload) = self.upload.take() {
+                    let _work = self
+                        .api
+                        .admit(Some(&self.principal.kid), true)
+                        .map_err(|status| store_error(status, ""))?;
                     let meta=STANDARD.encode(serde_json::to_vec(&json!({"kid":self.principal.kid,"folder":folder,"date":date.to_rfc3339(),"flags":flags,"size":upload.size})).map_err(|_|store::Error::Unavailable)?);
                     let scope = hex::encode(Sha256::digest(self.principal.kid.as_bytes()));
                     let api = &self.api;
@@ -1427,13 +1437,18 @@ impl MailStore for Store {
             // Large sets go in batches of BATCH UIDs inside this one command: each batch is
             // one atomic API call with its own statement, its own 5 s budget and its own COPY
             // replay ticket (derived from the command's, so a retry replays the batches that
-            // committed). Other connections get a turn between batches.
+            // committed). Other connections get a turn between batches. All of them share the
+            // command's deadline: past it, the batches that committed are shown and the rest
+            // fail, so a huge folder can't hold the session (and its shutdown) for minutes.
             let ticket = arg.get("ticket").cloned();
             for (i, batch) in all.chunks(BATCH).enumerate() {
                 if i > 0 {
+                    if Instant::now() > self.deadline {
+                        self.settle();
+                        return Err(store::Error::Partial);
+                    }
                     std::thread::yield_now();
                 }
-                self.deadline = Instant::now() + COMMAND;
                 arg["uids"] = Value::Array(batch.to_vec());
                 if let Some(t) = &ticket {
                     arg["ticket"] = batch_ticket(t, i);
@@ -1465,6 +1480,29 @@ impl MailStore for Store {
         }
         Ok(out)
     }
+}
+/// The largest body the API returns (call_coded's cap), in KiB: it fits every lane's budget for bodies.
+const BODY_MAX_KIB: usize = 48 << 10;
+/// A body's place in the task's and its lanes' budgets. A body larger than any read can return is a limit; a full
+/// budget is a busy server, which the client retries ([UNAVAILABLE]), never a limit of the inbox.
+fn body_reservation(
+    global: Arc<tokio::sync::Semaphore>,
+    lanes: [Arc<tokio::sync::Semaphore>; 4],
+    size: usize,
+    wait: Duration,
+) -> Result<crate::admission::Reservation, store::Error> {
+    let kib = size.div_ceil(1024).max(1);
+    if kib > BODY_MAX_KIB {
+        return Err(store::Error::Limit);
+    }
+    tokio::runtime::Handle::current()
+        .block_on(crate::admission::Reservation::take_within(
+            global,
+            Some(lanes),
+            kib as u32,
+            wait,
+        ))
+        .ok_or(store::Error::Unavailable)
 }
 /// UIDs per internal mutation call (the API's per-statement bound for COPY receipts too).
 const BATCH: usize = 1000;
@@ -2740,5 +2778,71 @@ mod tests {
         assert!(store.upload.is_none());
         assert_eq!(lanes.each_ref().map(|l| l.available_permits()), free);
         assert_eq!(global.available_permits(), 8);
+    }
+
+    /// One inbox's slow FETCHes fill only their own lanes' budget for bodies: the next body there waits and is refused
+    /// as a busy server ([UNAVAILABLE]), while another tenant's body still fits the task's budget. A body larger than any
+    /// read returns is the inbox's limit.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_full_inbox_body_share_leaves_the_task_budget_to_other_tenants() {
+        let global = Arc::new(tokio::sync::Semaphore::new(256 * 1024));
+        let lanes = |mib: usize| -> [Arc<tokio::sync::Semaphore>; 4] {
+            std::array::from_fn(|_| Arc::new(tokio::sync::Semaphore::new(mib * 1024)))
+        };
+        let busy = lanes(64);
+        let take = |l: &[Arc<tokio::sync::Semaphore>; 4], size: usize| {
+            let (global, l) = (global.clone(), l.clone());
+            tokio::task::block_in_place(move || {
+                body_reservation(global, l, size, Duration::from_millis(50))
+            })
+        };
+        let held = take(&busy, 40 << 20).unwrap();
+        assert!(matches!(
+            take(&busy, 30 << 20),
+            Err(store::Error::Unavailable)
+        ));
+        let other = take(&lanes(64), 40 << 20).unwrap();
+        assert!(matches!(
+            take(&lanes(64), 49 << 20),
+            Err(store::Error::Limit)
+        ));
+        drop((held, other));
+        assert_eq!(global.available_permits(), 256 * 1024);
+    }
+
+    /// A change of many UIDs goes in batches that share the command's deadline: past it, the batches that committed are
+    /// shown and the rest fail, instead of every batch granting itself another minute.
+    #[test]
+    fn a_batched_change_stops_at_the_command_deadline() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _enter = rt.enter();
+        let script = script();
+        let l = rt
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        rt.spawn(serve(l, script.clone()));
+        let api = Arc::new(Api::new(url, "k".repeat(32)).unwrap());
+        let mut store = Store::new(api, principal()).unwrap();
+        store.select("INBOX").unwrap();
+        let uids: Vec<u32> = (1..=2500).collect();
+        let flags = mailgw_core::store::Flags::from(["\\Seen".to_owned()]);
+        let change = |store: &mut Store| {
+            tokio::task::block_in_place(|| {
+                store.change(
+                    "INBOX",
+                    Change::Flags(&uids, Mode::Add, flags.clone(), None),
+                )
+            })
+        };
+        store.deadline = Instant::now() - Duration::from_millis(1);
+        assert!(matches!(change(&mut store), Err(store::Error::Partial)));
+        assert_eq!(script.mutations.lock().unwrap().len(), 1);
+        store.deadline = Instant::now() + COMMAND;
+        assert!(change(&mut store).is_ok());
+        assert_eq!(script.mutations.lock().unwrap().len(), 4);
     }
 }

@@ -110,6 +110,18 @@ and open nothing. A trickle under 25 an hour and 5 a half hour of an ordinary ty
 
 **Then** a person decides: fix and requeue, or delete what can never succeed. Do neither from an alert.
 
+### mail-behind
+Mail sent through the API (not a campaign's copies) that is queued and due: warns when the oldest has waited 5
+minutes, pages at 30, each for two ticks. Mail scheduled for later or waiting out an SES throttle is not due. A
+dispatcher that stopped (quota unknown, storage down, a shard that never woke) shows here even when it logs nothing.
+
+**An agent checks first**
+1. `GET /v1/operator/health`: `directMail` (growing or draining?), and whether `errors` lists `SES_*`, `STORAGE_TEMPORARILY_UNAVAILABLE` or `DISPATCH_CLAIM_BUSY`.
+2. `SELECT region,workspace_id,error_code,count(*),min(coalesce(scheduled_at,created_at)) FROM sending_emails WHERE status='queued' AND campaign_id IS NULL AND coalesce(scheduled_at,created_at)<=now() GROUP BY 1,2,3 ORDER BY 4 DESC LIMIT 20;` (one workspace or every one; the code says why it waits).
+3. Workers Logs, `code = DISPATCH_RUN` for the region: is a shard running, and what are `quotaRetryAt`, `paceRetryAt` and `deferred`?
+
+**Then** one workspace is that workspace's (paused connection, setup, its own daily quota); every workspace in a region is the dispatcher's: see dispatcher-failing.
+
 ## Campaigns
 
 A campaign's `rate` is what happened: recipients released per second, from its own cursor (`expanded`: everyone
@@ -220,7 +232,9 @@ A route had a request over 30 seconds in the last five minutes, or a p95 over 5 
 3. `DATABASE_UNAVAILABLE` is the database refusing or timing out: see database-errors. `INTERNAL_ERROR` is a bug: which deploy (`deploy` on the line)?
 
 ### errors
-Error-level log lines of one code, five in five minutes (request lines are counted under server-errors).
+Error-level log lines of one code, five in five minutes (request lines are counted under server-errors). A
+dispatcher's lines count after every run, not only a failed one; `INTERRUPTED_PROVIDER_ATTEMPT` is the minute sweep
+finding sends whose SES answer was never recorded (their outcome is unknown).
 `MAILBOX_STAGING_UNDELIVERED` alerts at its first line, critical (and as a failed job's error, at the first
 job): mail arrived for a real workspace and its arrival notice was lost, so nobody would otherwise know (#625).
 
