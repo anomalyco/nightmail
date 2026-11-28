@@ -21994,6 +21994,22 @@
           }
         ],
         "description": "A short-lived, nonrefreshable token for temporary scripts. Requires an MCP approval and never exceeds it. A manage token makes no change that outlasts it: no API keys, webhooks, endpoints, routes, rules, mail client passwords or inbox connections.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -22575,6 +22591,22 @@
           }
         ],
         "description": "One key type with permissions. By default a workspace key (permissions, optional sender domains). With access, a key limited to receiving addresses or to one agent inbox (bearer nm_mbx_…): it reads and, with send, replies only there, and never reaches the rest of the workspace. expiresAt ends it at a chosen time. The secret is returned once; everything else about the key changes later on the same secret (updateApiKey). A key created over MCP, or with a key that was, is tied to that approval: approval and nextStep in the result say until when.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -24280,6 +24312,22 @@
             "secureDashboardSession": []
           }
         ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -25715,6 +25763,22 @@
           },
           {
             "secureDashboardSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -27251,6 +27315,22 @@
             "secureDashboardSession": []
           }
         ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -28149,6 +28229,22 @@
           }
         ],
         "description": "Persist a preview before commit. Feature limit: 5 MiB UTF-8 CSV, 50,000 rows, 100 columns per import; preview and commit a larger file in parts of that size (the dashboard does this for files up to 1,000,000 rows and 100 MiB). Map headers explicitly. Valid rows can commit alongside a retained row-error report. Imports never lift suppression; consent changes only when the commit attests it. Each workspace keeps at most 50 uncommitted previews (oldest evicted) and allows 40 previews per minute.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -29152,6 +29248,22 @@
           }
         ],
         "description": "Make a topic, a kind of marketing mail recipients can opt out of on its own (up to 100 that aren’t archived). Recipients see its name and description on the preference page. subscribedByDefault is fixed once made.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -30240,6 +30352,22 @@
           }
         ],
         "description": "Creates a new list that is a newsletter (name), or makes an existing list one (listId). A newsletter is a contact list with a sender: its ID and name are the list’s, and renaming either renames both. Its issues are ordinary campaigns to that list: create one with createCampaign and audience.listId set to the newsletter’s ID, and list them with listCampaigns listId. There are no separate issue operations.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -31114,6 +31242,22 @@
           },
           {
             "secureDashboardSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -32505,6 +32649,22 @@
             "secureDashboardSession": []
           }
         ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -32663,6 +32823,22 @@
           },
           {
             "secureDashboardSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -41896,6 +42072,22 @@
           }
         ],
         "description": "Create an endpoint for email events. The response includes the signing secret (whsec_…) used for the Webhook-Signature header; store it on your server. Deliveries follow Standard Webhooks: Webhook-Signature is v1,<base64 HMAC-SHA256 of \"{Webhook-Id}.{Webhook-Timestamp}.{raw body}\"> keyed with the base64 bytes after whsec_. Failed deliveries (408, 429, 5xx or network error) are tried up to 10 times with exponential backoff (15 s, 1 min, 4 min, 16 min, 64 min, ~4.3 h, then 12 h between remaining attempts, honoring Retry-After). Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -46094,6 +46286,20 @@
             "description": "Apply only if routing is still at this version, from GET /v1/routing or a previous ETag.",
             "name": "if-match",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -48716,6 +48922,22 @@
         "operationId": "createEndpoint",
         "summary": "Create an endpoint",
         "description": "Create a named Slack, Discord, webhook or forward endpoint. Slack and Discord URLs are credentials: stored encrypted, pinned to the provider host and never returned. A webhook endpoint is a route-only inbound webhook; its signing secret is returned once. A forward emails its recipient a single-use confirmation link (24 hours); it stays pending until they choose Allow. With preverify, an address on a domain this workspace has verified is ready at once (auto: wherever that applies, else emailed). A rule calls it as endpoints.<name>() and a route forwards to it as forward:<name>, also while it waits: the recipient gets each message received from the moment they allow it, whole (text, HTML and attachments), and none received before.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -49731,6 +49953,22 @@
         ],
         "summary": "Create an inbox connection",
         "description": "Key shown once. Generate client config with a key limited to selected inboxes.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -57453,6 +57691,22 @@
         "operationId": "createInbox",
         "summary": "Create an agent inbox",
         "description": "Creates an inbox with a fresh address. Set type=persistent for forever retention (no lease or default per-inbox cap; workspace manage permission). The default is an expiring inbox on one of the workspace’s active receiving domains, or a sandbox inbox that needs no DNS. Then wait for mail with GET /v1/inboxes/{id}/messages?wait=30 (or the SDK’s waitForMessage). Needs a workspace admin or a key with create permission. Limits: 60 creates per minute and 50,000 retained inboxes (including grace and pending erasure) per workspace. Errors: RECEIVING_DOMAIN_REQUIRED and RECEIVING_NOT_ACTIVE name the DNS step to take; ADDRESS_TAKEN, ADDRESS_RETIRED, EPHEMERAL_INBOX_LIMIT, INBOX_CREATE_RATE (with Retry-After) and IDEMPOTENCY_CONFLICT.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -61578,6 +61832,20 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -62486,6 +62754,22 @@
         "deprecated": true,
         "summary": "Create a receivable address",
         "description": "Admin only. Mail arrives once the domain is verified and its receiving MX record is active. Hosted, an address on one of your own domains (or a subdomain of one), verified or still being verified, where nothing receives yet turns receiving on at its host, as addReceivingHost does, and the answer’s receiving names the MX record to publish, the host’s status and whether the domain is verified yet; a host whose mail another provider receives today is refused with RECEIVING_HOST_IN_USE and the call that moves it. A refused request creates nothing, and receiving stays as it was. Permanent addresses claim earlier unrouted mail (kept 30 days) for their address or rules; temporary addresses start empty. Expiry stops new delivery and sending without deleting history.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -66087,6 +66371,22 @@
         ],
         "summary": "Subscribe to inbound events",
         "description": "Deliveries are signed with Standard Webhooks headers (Webhook-Id, Webhook-Timestamp, Webhook-Signature) and retried with backoff. The endpoint must be a public HTTPS URL. The signing secret, and for the inbound format its verification token, are returned once. A webhook with a key is also a named endpoint (listEndpoints). Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -70036,6 +70336,22 @@
         ],
         "summary": "Create a link to add credit",
         "description": "Hosted only; owners, admins and manage credentials. Returns a Stripe Checkout link for a person to open and pay; the caller never handles card details. The link expires in 23 hours.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {

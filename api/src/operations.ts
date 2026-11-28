@@ -106,7 +106,7 @@ const listSchema = <T extends z.ZodType>(item: T, name: string) => z.object({ da
 export const DomainPage = z.object({ data: z.array(domainSchema), nextCursor: z.string().nullable(),
   quota: z.object({ used: z.number().int().describe('Domains in the workspace, across every region and page.'), limit: z.number().int().describe(`How many domains the workspace may have: 100 unless ${productName} set another limit on request.`) }).optional()
     .describe('Hosted only, and only for credentials without domain restrictions. Absent when the workspace sends through its own AWS account, which has no domain total. Adding a domain past the limit fails with DOMAIN_LIMIT_REACHED; at most 10 of them may be unproven at once.') }).openapi('DomainPage');
-export function workspaceActor(c: Ctx, permission: Permission = 'read') { const a = actor(c, permission); if (a.domains.length) throw unrestrictedRequired(a, restrictedArea(c.req.path), requiredOf(c, permission)); return a; }
+export function workspaceActor(c: Ctx, permission: Permission = 'read') { const a = actor(c, permission); if (a.domains.length) throw unrestrictedRequired(a, restrictedArea(c.req.path), requiredOf(c)); return a; }
 // Like API keys, webhooks are set up, changed and removed by lasting credentials: a temporary agent token reads them and
 // their deliveries, and can test or retry a delivery, but does not create, change or delete them or read their signing
 // secrets.
@@ -722,7 +722,7 @@ function dnsSetupActor(c:Ctx) {
   // A person approves this at their DNS provider: the link is signed for them, and the provider sends their browser back
   // to the dashboard. A key gets the records themselves from the domain, and says so when refused.
   const id=c.req.param('id') ?? '{id}';
-  if (a.credential!=='dashboard' || (a.role!=='owner' && a.role!=='admin')) throw denied('PERMISSION_DENIED',`One-click DNS setup is for an owner or admin signed in to the dashboard: it returns a link a person approves at their DNS provider. Every record to publish is in GET /v1/domains/${id} (dns: each record's name, type, value and status). Publish them at the DNS provider, then call POST /v1/domains/${id}/verify to check them now; the domain also re-checks on its own.`,{ permission: 'configuration', level: 'write', credential: 'dashboard', person: 'admin' });
+  if (a.credential!=='dashboard' || (a.role!=='owner' && a.role!=='admin')) throw denied('PERMISSION_DENIED',`One-click DNS setup is for an owner or admin signed in to the dashboard: it returns a link a person approves at their DNS provider. Every record to publish is in GET /v1/domains/${id} (dns: each record's name, type, value and status). Publish them at the DNS provider, then call POST /v1/domains/${id}/verify to check them now; the domain also re-checks on its own.`,{ ...requiredOf(c), credential: 'dashboard' });
   return a;
 }
 /**
@@ -1234,7 +1234,7 @@ export function registerOperations(app: App) {
     description:`Dashboard only. Sends a test email to the signed-in user’s own address; it takes no recipient. Without a body it is fixed content from hello@<domain>. With both subject and text (onboarding’s first email) it comes from "${SETUP_SENDER.name}" <${SETUP_SENDER.local}@<domain>> with those words, screened like any send unless they are onboarding’s own; a reply to it comes back into the workspace on a domain that receives. Other fields are ignored. Needs send permission and a verified domain, and counts like any other send. Use an Idempotency-Key to make a retry safe.`,
     request:{params:IdParams,body:{...json(TestEmailContent),required:false}},responses:{202:response(z.object({id:z.string(),status:z.literal('queued'),simulated:z.boolean()}).openapi('TestEmailQueued')),...errors}}),async c=>{
     const a=actor(c,'send'), content=c.req.valid('json') as z.infer<typeof TestEmailContent>|undefined;
-    if (a.credential!=='dashboard' || !a.email) throw denied('DASHBOARD_SESSION_REQUIRED','Sign in to the dashboard to send a test email to yourself.',{ permission: 'sendEmail', level: 'on', credential: 'dashboard' });
+    if (a.credential!=='dashboard' || !a.email) throw denied('DASHBOARD_SESSION_REQUIRED','Sign in to the dashboard to send a test email to yourself.',{ ...requiredOf(c), credential: 'dashboard' });
     const [row]=await c.env.db.select({name:domains.name}).from(domains).where(and(scoped(domains,a),eq(domains.id,c.req.valid('param').id)));
     if (!row) return notFound('Domain');
     allowedDomain(a,row.name);

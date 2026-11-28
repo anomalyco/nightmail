@@ -215,7 +215,7 @@ export function registerSenderScore(app: App) {
     description: `The workspace sender score, the daily limit it sets and the enforcement step (Hosted). In good standing (a score of ${GOOD_STANDING} or more, no warning) there is no daily limit: limit.unlimited is true, limit.daily null, and only the per-minute pace (limit.perMinute) applies. A new workspace's first ${EVALUATION.recipients} real recipients are its evaluation, at ${EVALUATION.limit} a day until their delivery results are in (gradedBy says by when); for ${GROWTH.hours} clean hours after it, sending grows from ${GROWTH.start.toLocaleString('en-US')} recipients an hour, doubling with each clean hour (limit.growth). Under ${GOOD_STANDING} the limit is 500 (70–74), 200 (65–69) or 100, and a warning freezes it. The score (0–100) is the quality of what the workspace sends (complaints, the spam screen, bounces, list quality, authentication and engagement), decayed with a 30-day half-life and recounted hourly. Self-hosted and BYO get the score for display only. ${DASHBOARD_CACHE_NOTE} A change of standing or limit shows at once. Workspace-wide: keys restricted to domains get 403.`,
     responses: { 200: response(SenderScoreSchema), ...errors } }), async c => {
     const a = actor(c, 'read');
-    if (a.domains.length) throw unrestrictedRequired(a, restrictedArea(c.req.path), requiredOf(c, 'read'));
+    if (a.domains.length) throw unrestrictedRequired(a, restrictedArea(c.req.path), requiredOf(c));
     const compute = async () => scoreView(await loadDisplayedStanding(c.env, a.workspaceId));
     if (a.credential !== 'dashboard') return c.json(await compute(), 200);
     // Keyed by the standing's version and sequence too: a release, resume or operator action (or a limit change) shows at

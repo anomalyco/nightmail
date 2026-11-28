@@ -97,7 +97,7 @@ export async function instantiateTemplate(runtime: Runtime, db: DbExecutor, iden
 
 function manageTemplates(c: Parameters<typeof actor>[0]) {
   const value = actor(c, 'editContent');
-  if (value.domains.length) throw unrestrictedRequired(value, 'Templates need', requiredOf(c, 'editContent'));
+  if (value.domains.length) throw unrestrictedRequired(value, 'Templates need', requiredOf(c));
   return value;
 }
 

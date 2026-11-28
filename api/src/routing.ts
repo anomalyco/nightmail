@@ -720,8 +720,9 @@ export function registerRouting(app: App) {
       responses: { 200: response(RoutingChange), ...errors },
     }),
     async (c) => {
+      // A restore is a change: refused as one, before the version is read.
       const v = c.req.valid('param').v,
-        w = workspace(c);
+        w = receivingAdmin(c, 'change routes').workspaceId;
       return c.json(
         await edit(
           c,

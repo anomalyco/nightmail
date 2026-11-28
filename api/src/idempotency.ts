@@ -155,6 +155,15 @@ export const AUTHENTICATED_CREATES = [
   /^\/v1\/billing\/(?:top-ups|top-up-links)$/,
 ];
 export const MAILBOX_CREATES = [/^\/v1\/inboxes$/, /^\/v1\/inbound\/(?:addresses|webhooks)$/, /^\/v1\/inbound\/domains\/[^/]+\/subdomains$/];
+/** A route's declared headers with Idempotency-Key among them. */
+export function withIdempotencyKey(headers: unknown): z.ZodObject {
+  if (headers === undefined) return IdempotencyHeaders;
+  if (!(headers instanceof z.ZodObject)) throw new Error('Declare a create route\'s headers as one object.');
+  return Object.keys(headers.shape).some(name => name.toLowerCase() === 'idempotency-key') ? headers : headers.extend(IdempotencyHeaders.shape);
+}
+/** Whether the create middleware (authenticatedCreates or mailboxCreates) honors Idempotency-Key on this route, a concrete
+ *  path or an OpenAPI template. app.ts declares the header on each such route, as idempotent()'s routes declare it themselves. */
+export const createKeyRoute = (method: string, path: string) => method.toUpperCase() === 'POST' && [...AUTHENTICATED_CREATES, ...MAILBOX_CREATES].some(p => p.test(path));
 // Field names that hold credentials at any depth (createInbox nests its key under credential.secret).
 // "key" is not one: addresses and webhooks use it for their routing key.
 const SECRET_FIELDS = new Set(['secret', 'token', 'verificationToken', 'password']);

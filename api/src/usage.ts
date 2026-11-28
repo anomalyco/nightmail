@@ -56,7 +56,7 @@ export function registerUsage(app: App) {
     responses: { 200: response(Usage), ...errors } }), async c => {
     if (!c.env.config.multiTenant) return notFound('Endpoint');
     const a = actor(c, 'read');
-    if (a.domains.length) throw unrestrictedRequired(a, restrictedArea(c.req.path), requiredOf(c, 'read'));
+    if (a.domains.length) throw unrestrictedRequired(a, restrictedArea(c.req.path), requiredOf(c));
     // The received count includes unrouted and spam mail, so it belongs to whoever may list all of it (listInboundMessages
     // as an administrator). Anyone else could otherwise poll it around a probe to learn which addresses take mail.
     const receiving = actorMailAccess(a)?.admin === true;

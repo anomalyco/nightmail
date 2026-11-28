@@ -72,7 +72,7 @@ const Cursor = z.string().regex(/^\d{1,19}$/).optional();
 function billingActor(c: Ctx, permission: 'read' | 'manage') {
   if (!c.env.config.multiTenant) notFound('Endpoint');
   const a = actor(c, permission);
-  if (a.domains.length) throw unrestrictedRequired(a, 'Billing needs', requiredOf(c, permission));
+  if (a.domains.length) throw unrestrictedRequired(a, 'Billing needs', requiredOf(c));
   return a;
 }
 const seesMoney = (a: Actor) => a.permissions.includes('manage');

@@ -7769,6 +7769,12 @@ export type CreateAgentTokenData = {
         domains?: Array<string>;
         purpose: string;
     };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/agent-tokens';
@@ -7964,6 +7970,12 @@ export type ListApiKeysResponse = ListApiKeysResponses[keyof ListApiKeysResponse
 
 export type CreateApiKeyData = {
     body: CreateApiKey;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/api-keys';
@@ -8925,6 +8937,12 @@ export type CreateContactData = {
             [key: string]: string | number | boolean | null;
         };
     };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/contacts';
@@ -9427,6 +9445,12 @@ export type CreateContactListData = {
     body: {
         name: string;
         description?: string;
+    };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
     };
     path?: never;
     query?: never;
@@ -9969,6 +9993,12 @@ export type CreateSegmentData = {
         name: string;
         rule: SegmentRule;
     };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/segments';
@@ -10393,6 +10423,12 @@ export type PreviewContactImportData = {
             country?: string;
         };
     };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/contact-imports';
@@ -10667,6 +10703,12 @@ export type CreateTopicData = {
          * What a contact who never chose gets: true sends the topic to everyone subscribed to marketing until they opt out of it; false only to those who opted in. Fixed when the topic is made.
          */
         subscribedByDefault?: boolean;
+    };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
     };
     path?: never;
     query?: never;
@@ -11069,6 +11111,12 @@ export type ListNewslettersResponse = ListNewslettersResponses[keyof ListNewslet
 
 export type CreateNewsletterData = {
     body: CreateNewsletterInput;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/newsletters';
@@ -11389,6 +11437,12 @@ export type ListCampaignTemplatesResponse = ListCampaignTemplatesResponses[keyof
 
 export type CreateCampaignTemplateData = {
     body: CreateCampaignTemplate;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/templates';
@@ -11902,6 +11956,12 @@ export type SetCampaignTemplateArchivedResponse = SetCampaignTemplateArchivedRes
 
 export type UploadTemplateAssetData = {
     body: TemplateAssetUpload;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/template-assets';
@@ -11963,6 +12023,12 @@ export type UploadTemplateAssetResponse = UploadTemplateAssetResponses[keyof Upl
 
 export type ImportTemplateImageData = {
     body: TemplateImageImport;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/template-assets/import';
@@ -15542,6 +15608,12 @@ export type ListWebhooksResponse = ListWebhooksResponses[keyof ListWebhooksRespo
 
 export type CreateWebhookData = {
     body: CreateWebhook;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/webhooks';
@@ -17196,6 +17268,10 @@ export type CreateRouteData = {
          * Apply only if routing is still at this version, from GET /v1/routing or a previous ETag.
          */
         'if-match'?: string;
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
     };
     path?: never;
     query?: never;
@@ -18157,6 +18233,12 @@ export type ListEndpointsResponse = ListEndpointsResponses[keyof ListEndpointsRe
 
 export type CreateEndpointData = {
     body: CreateEndpoint;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/endpoints';
@@ -18560,6 +18642,12 @@ export type CreateInboxConnectionData = {
          */
         auth: 'key' | 'oauth';
         reply?: boolean;
+    };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
     };
     path?: never;
     query?: never;
@@ -21399,6 +21487,12 @@ export type CreateInboxData = {
             permissions: Array<'read' | 'modify' | 'send'>;
         };
     };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/inboxes';
@@ -22783,6 +22877,12 @@ export type ListInboundSubdomainsResponse = ListInboundSubdomainsResponses[keyof
 
 export type CreateInboundSubdomainData = {
     body: CreateInboundSubdomain;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path: {
         id: string;
     };
@@ -23109,6 +23209,12 @@ export type ListInboundAddressesResponse = ListInboundAddressesResponses[keyof L
 
 export type CreateInboundAddressData = {
     body: CreateInboundAddress;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/inbound/addresses';
@@ -24482,6 +24588,12 @@ export type ListInboundWebhooksResponse = ListInboundWebhooksResponses[keyof Lis
 
 export type CreateInboundWebhookData = {
     body: CreateInboundWebhook;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/inbound/webhooks';
@@ -27067,6 +27179,12 @@ export type CreateBillingTopUpData = {
         amountCents: number;
         method: 'checkout' | 'saved_card';
     };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/v1/billing/top-ups';
@@ -27137,6 +27255,12 @@ export type CreateBillingTopUpLinkData = {
          * Whole US cents, $20 to $10,000, excluding tax.
          */
         amountCents: number;
+    };
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path. This route's keys do not expire: a repeat with the same key replays the original result at any later time. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
     };
     path?: never;
     query?: never;
