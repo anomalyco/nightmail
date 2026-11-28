@@ -5,23 +5,18 @@
 .developer-url > .copy-action { flex-shrink: 0; }
 .developer-url > .cluster { flex-shrink: 0; }
 /* Icon-only actions: small mark, 40px hit area from a pseudo-element, so nothing around it moves. */
-.developer-icon-actions { display: flex; align-items: center; gap: var(--space-16); }
 .ui-button.developer-copy-icon { position: relative; display: inline-grid; place-items: center; padding: 0; width: var(--control-height-sm); height: var(--control-height-sm); flex-shrink: 0; color: var(--color-muted); }
 .ui-button.developer-copy-icon::before { content: ''; position: absolute; inset: -8px; }
 .developer-copy-icon .copy-action__icon svg { width: 14px; height: 14px; }
 .developer-copy-icon[data-copied] { color: var(--color-success); }
 .developer-copy { max-width: 72ch; margin: 0; text-wrap: pretty; }
-.developer-access { max-width: 420px; }
-.developer-access .ui-select-trigger { min-height: 40px; height: auto; }
-.developer-access .ui-select-trigger > span:first-child { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 /* Code keeps its lines: a long line scrolls sideways instead of breaking a word ("s / ubject") in the middle. */
 .developer-code { margin: 0; padding: var(--space-12) var(--space-16); background: var(--color-layer-1); border-radius: var(--radius-sm); font-size: var(--text-sm); line-height: var(--leading-sm); white-space: pre; overflow-x: auto; min-width: 0; }
 .developer-steps { margin: 0; padding-inline-start: var(--space-24); max-width: 72ch; }
 .developer-steps li + li { margin-top: var(--space-12); }
 .developer-steps code { overflow-wrap: anywhere; }
-@media (max-width: 640px) { .ui-button.developer-copy-icon::before { inset: -10px; } .first-send-test .ui-button { min-height: 44px; } .developer-icon-actions { gap: var(--space-20); } }
+@media (max-width: 640px) { .ui-button.developer-copy-icon::before { inset: -10px; } .first-send-test .ui-button { min-height: 44px; } }
 @media (max-width: 560px) {
-  .developer-access .ui-select-trigger { min-height: 44px; font-size: var(--text-lg); }
   .developer-code { padding: var(--space-12); font-size: var(--text-xs); white-space: pre; overflow: auto; }
 }
 .developer-client-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-width: 0; }
@@ -30,7 +25,6 @@
 .developer-client-panels { display: grid; min-width: 0; }
 .developer-client-panel { grid-area: 1 / 1; min-width: 0; }
 .developer-client-panel:not([data-active]) { visibility: hidden; }
-.developer-icon-actions[data-pending] { visibility: hidden; }
 
 .first-send-test { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-12); }
 /* TestSentLine: queued, delivered and any other outcome in one cell; only the one that applies shows. */

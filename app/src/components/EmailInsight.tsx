@@ -340,11 +340,11 @@ const useClientDocs = (previews: ClientPreview[] | undefined) => useMemo(() => n
  * and a received email's headers sit behind More. Without it (a draft): the clients. Each client is an offline
  * emulation with its issue count. `fill`: the preview fills its parent's height and scrolls inside; otherwise it is as
  * tall as the email. `wide`: where there is room, the phone width beside the desktop one. `compact` (a phone or tablet): one row of controls, the view picked from a sheet, no captions;
- * a phone always shows phone width. `loading`: the draft's HTML is on its way.
+ * a phone always shows phone width.
  */
 // `heldImages`: the email as sent has remote images held back (useEmailDocument's `held`): its view says so, with Load
 // images, in the row over the frames, where nothing moves when the line comes or goes (on a phone, over the frame).
-export function EmailViews({ source, previewSource, check, original, loading = false, fill = false, wide = false, compact = false, toolbarEnd, heldImages }: { source: InsightSource; previewSource: PreviewSource | null; check?: Check; original?: OriginalEmail; loading?: boolean; fill?: boolean; wide?: boolean; compact?: boolean; toolbarEnd?: ReactNode; heldImages?: { why: string; onLoad: () => void } | null }) {
+export function EmailViews({ source, previewSource, check, original, fill = false, wide = false, compact = false, toolbarEnd, heldImages }: { source: InsightSource; previewSource: PreviewSource | null; check?: Check; original?: OriginalEmail; fill?: boolean; wide?: boolean; compact?: boolean; toolbarEnd?: ReactNode; heldImages?: { why: string; onLoad: () => void } | null }) {
   const phone = usePhone()
   const id = useId()
   const [room, canvas] = useRoom()
@@ -434,12 +434,12 @@ export function EmailViews({ source, previewSource, check, original, loading = f
   const showDevice = !(slots.some(slot => slot.device === 'desktop') && slots.some(slot => slot.device === 'mobile'))
   const showFrames = frameView && !failedQuery && !missing
   const held = Boolean(heldImages) && view === 'original' && showFrames
-  const listing = hasHtml && !clientsReady && (loading || Boolean(previewSource))
+  const listing = hasHtml && !clientsReady && Boolean(previewSource)
   const offTheme = themed ? undefined : view === 'original' && hasHtml ? 'This email doesn’t opt in to dark mode. Pick a client to see it dark.' : 'Dark mode depends on the client', offWidth = sourceView || !hasHtml ? 'Width applies to previews' : undefined
   const sourceName = view === 'html' ? 'HTML source' : view === 'headers' ? 'Headers' : 'Plain text'
   const more = original && <DropdownMenu label="More views" align="end" items={[{ label: 'HTML source', onSelect: () => setChosen('html'), disabled: !hasHtml }, { label: 'Plain text', onSelect: () => setChosen('text') }, ...original.headers !== undefined ? [{ label: 'Headers', onSelect: () => setChosen('headers') }] : []]}
     trigger={<button type="button" className="ev-more" data-active={(sourceView && !compact) || undefined} aria-label={sourceView ? `More views: ${sourceName}` : 'More views'} title="More views">{sourceView && !compact ? (view === 'html' ? 'HTML' : view === 'headers' ? 'Headers' : 'Text') : <MoreHorizontal size={16} aria-hidden="true" />}</button>} />
-  if (!original && !previewSource && !loading) return <p className="muted ev-note">Nothing to preview</p>
+  if (!original && !previewSource) return <p className="muted ev-note">Nothing to preview</p>
   return <div className="ev" data-fill={fill || undefined} data-compact={compact || undefined}>
     {compact ? <div className="ev-toolbar">
       <ViewPicker value={view} current={sourceView ? sourceName : options.find(option => option.value === view)?.label ?? client?.label ?? 'Original'} options={options} onChange={setChosen} loading={listing} />

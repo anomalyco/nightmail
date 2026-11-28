@@ -49,7 +49,7 @@ export function ListsView() {
   const [shown, setShown] = useState<OperatorListRow | null>(null)
   if (lists.isError && !lists.data) return <ErrorState error={lists.error} onRetry={() => void lists.refetch()} />
   return <>
-    <DataTable className="op-table" loading={lists.isPending} skeletonRows={6} rows={rows} rowKey={row => row.campaignId} onRowClick={setShown} columns={columns}
+    <DataTable loading={lists.isPending} skeletonRows={6} rows={rows} rowKey={row => row.campaignId} onRowClick={setShown} columns={columns}
       empty={<EmptyState title="No campaigns to lists in the last 90 days" />} />
     {lists.hasNextPage && <Button className="op-more" loading={lists.isFetchingNextPage} onClick={() => void lists.fetchNextPage()}>Load more</Button>}
     {lists.isError && lists.data && <Alert tone="danger"><ErrorText error={lists.error} /></Alert>}

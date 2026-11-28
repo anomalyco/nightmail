@@ -311,7 +311,7 @@ export function ReceivingPage() {
     return () => { window.removeEventListener('focus', catchUp); document.removeEventListener('visibilitychange', catchUp) }
   }, [client])
   const counts = data && { addresses: kindCount(data.counts, 'all'), rules: data.rules.length, destinations: data.endpoints.length }
-  return <div className="stack inbound-stack receiving-page">
+  return <div className="stack inbound-stack">
     {/* The page's one action. An address's mail is on its own page; every address's mail is in Logs. */}
     {/* Until a domain receives, the first-run steps carry the way in; a dead button here would only say no. */}
     <PageHeader title="Mail routing" actions={manage && (!data || receivingDomains(data.domains).length > 0) && <Button variant="primary" disabled={!data} onClick={() => setCreating({ address: '' })}>New address</Button>} />

@@ -167,7 +167,7 @@ export function WebhookBodySkeleton({ isNew = false, selectedRegions = false }: 
 
 export function DomainDetailSkeleton() {
   const { multiTenant } = useWorkspaceAccess()
-  return <LoadingRegion className="stack domain-page" label="Loading domain">
+  return <LoadingRegion className="stack" label="Loading domain">
     <PageHeader title={<SkeletonText width={260} lineHeight={28} />} backTo="/domains" actions={<><Skeleton className="domain-status-skeleton" width={72} height={20} /><ControlSkeleton width={112} /><ControlSkeleton width={124} /></>} />
     <div className="domain-sections"><section className="section stack domain-records-section">
       <div className="domain-records-fold__skeleton" aria-hidden="true"><Skeleton width="100%" height={44} /></div>

@@ -42,5 +42,5 @@ function NewsletterSkeleton({ id }: { id: string }) {
 export function NewsletterRouteSkeleton({ id }: { id?: string }) {
   if (id === 'new') return <div className="stack newsletter-new"><PageHeader title="New newsletter" backTo="/campaigns" actions={<Button variant="primary" disabled>Create newsletter</Button>} /><FieldSkeleton label="Name" /><FieldSkeleton label="From" /></div>
   if (id) return <NewsletterSkeleton id={decodeURIComponent(id)} />
-  return <div className="stack"><PageHeader title="Newsletters" /><TableSkeleton className="newsletters-table" columns={newsletterColumns} rows={4} /></div>
+  return <div className="stack"><PageHeader title="Newsletters" /><TableSkeleton columns={newsletterColumns} rows={4} /></div>
 }

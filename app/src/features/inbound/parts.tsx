@@ -1,5 +1,4 @@
 import { Archive, Asterisk, AtSign, Ban, Bot, Clock, Forward, Hash, Inbox, MessageSquare, Plus, ScrollText, Webhook } from 'lucide-react'
-import type { ReactNode } from 'react'
 import { outcomes } from './concepts'
 import { PrivateAddress, useMasked } from '../../components/PrivateAddress'
 import { isMailbox } from '../../lib/private-address'
@@ -46,8 +45,3 @@ export function Targets({ to, ownId, max = 3, total = to.length }: { to: Target[
   </span>)}{total > Math.min(max, to.length) && <span className="muted">+{total - Math.min(max, to.length)}</span>}</span>
 }
 
-/** The rules an address runs, in order; with max, the first few on one line and how many more. */
-export function Chain({ keys, empty, max = keys.length }: { keys: string[]; empty?: ReactNode; max?: number }) {
-  if (!keys.length) return <>{empty ?? <span className="muted">—</span>}</>
-  return <span className="rcv-chain" data-line={max < keys.length || undefined} title={max < keys.length ? keys.join(' → ') : undefined}>{keys.slice(0, max).map((k, i) => <span key={k}>{i > 0 && <span className="rcv-chain__then" aria-hidden="true">→</span>}<code>{k}</code></span>)}{keys.length > max && <span className="muted">+{keys.length - max}</span>}</span>
-}

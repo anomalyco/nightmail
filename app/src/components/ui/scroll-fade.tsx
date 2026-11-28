@@ -4,7 +4,7 @@
 // background, border and shadow too, so a surface with a shadow scrolls an inner .ui-popover-scroll instead.
 const FADES = [
   '.ui-scroll-fade', '.ui-dialog__body', '.ui-sheet__body', '.ui-table-scroll', '.ui-tabs', '.sidebar', '.support-log', 'pre',
-  '.limits-table-scroll', '.docs-table-scroll', '.legal-table', '.docs-install > code', '.developer-url > code', '.trace-code',
+  '.limits-table-scroll', '.docs-table-scroll', '.legal-table', '.docs-install > code', '.developer-url > code',
   '.ui-subnav__scroll', '.legal-toc', '.legal-switcher', '.rcv-filters', '.mailbox-threads', '.mailbox-reader',
   '.template-picker', '.settings-key-domain-options', '.ritual-diff', '.ui-popover-scroll',
   '.uin-list', '.uin-body',

@@ -199,11 +199,11 @@ function KeyDetails({ row, fields, onClose, onRevoke, onEdit }: { row: Row | nul
     {row?.kind === 'key' && <Tabs label="Key" value={tab} onValueChange={setTab} items={[{ value: 'details', label: 'Details' }, { value: 'changes', label: 'Changes' }]} />}
     <div className="keys-panels">
       <div className="keys-details" data-inactive={tab !== 'details' || undefined} inert={tab !== 'details'}>
-        <h3 className="ui-label ui-label--rule">Permissions</h3>
+        <h3 className="ui-label">Permissions</h3>
         <KeyValues items={facts.filter(([label]) => accessFacts.has(label))} />
-        {life.some(([label]) => keyFacts.has(label)) && <><h3 className="ui-label ui-label--rule">Key</h3>
+        {life.some(([label]) => keyFacts.has(label)) && <><h3 className="ui-label">Key</h3>
         <KeyValues items={life.filter(([label]) => keyFacts.has(label))} /></>}
-        <h3 className="ui-label ui-label--rule">Dates</h3>
+        <h3 className="ui-label">Dates</h3>
         <KeyValues items={life.filter(([label]) => !keyFacts.has(label))} />
       </div>
       {row?.kind === 'key' && <div className="keys-changes" data-inactive={tab !== 'changes' || undefined} inert={tab !== 'changes'}><KeyChanges keyId={row.key.id} /></div>}

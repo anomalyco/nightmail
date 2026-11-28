@@ -9,7 +9,6 @@
 /* Last activity and Updated read as data: mono, a size down, like the counts beside them. */
 .campaigns-table .ui-table td[data-col='updated'] { font-family: var(--font-mono); font-size: var(--text-xs); }
 .campaign-row-name > span { min-width: 0; overflow: clip; text-overflow: ellipsis; white-space: nowrap; }
-.campaign-audience-review-skeleton { display: contents; }
 .campaign-summary-line > .ui-skeleton-line { width: 45px; flex-shrink: 0; }
 /* ── The campaign studio: where a campaign, an issue or a template is written (index.tsx, templates.tsx, EmailComposer).
    From 900 px it is full-bleed: the sidebar and the command bar step aside and the studio covers the viewport, fixed
@@ -64,7 +63,7 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 }
 /* What sits on the sheet (the mail header rows, a phone's toolbar, the attachments, the fallbacks, their loading
    states) takes the light theme's steps and inks in either theme. */
-.campaign-compose-page :is(.campaign-compose-metadata, .composer-toolbar, .composer-error, .composer-starting, .campaign-file-blocks, .campaign-personalize, .composer-skeleton-tools, .composer-skeleton-canvas) { --color-surface: #FFFFFF; --color-canvas: #EFEFEF; --color-layer-1: #F5F5F5; --color-layer-2: #E8E8E8; --color-layer-3: #D8D8D8; --color-control: #F0F0F0; --color-control-hover: #E6E6E6; --color-control-focus: #DCDCDC; --color-control-pressed: #D4D4D4; --color-control-invalid: #FBEBEB; --color-control-invalid-focus: #F6DCDC; --color-hover: #F0F0F0; --color-pressed: #E6E6E6; --color-active-bg: #E8E8E8; --color-text: #111111; --color-muted: #555555; --color-faint: #666666; --color-accent: #111111; --color-accent-hover: #2B2B2B; --color-accent-pressed: #000000; --color-accent-text: #111111; --color-on-accent: #FFFFFF; --color-on-accent-muted: #BCBCBC; --color-kbd-inset: #FFFFFF; --color-success: #147839; --color-success-marker: #15803D; --color-warning: #AA4E09; --color-warning-marker: #B45309; --color-danger: #CB2323; --color-danger-marker: #DC2626; --color-info: #1D4ED8; color-scheme: light; }
+.campaign-compose-page :is(.campaign-compose-metadata, .composer-toolbar, .composer-error, .composer-starting, .campaign-file-blocks, .campaign-personalize, .composer-skeleton-tools, .composer-skeleton-canvas) { --color-surface: #FFFFFF; --color-layer-1: #F5F5F5; --color-layer-2: #E8E8E8; --color-layer-3: #D8D8D8; --color-control: #F0F0F0; --color-control-hover: #E6E6E6; --color-control-focus: #DCDCDC; --color-control-pressed: #D4D4D4; --color-control-invalid: #FBEBEB; --color-control-invalid-focus: #F6DCDC; --color-hover: #F0F0F0; --color-pressed: #E6E6E6; --color-active-bg: #E8E8E8; --color-text: #111111; --color-muted: #555555; --color-faint: #666666; --color-accent: #111111; --color-accent-hover: #2B2B2B; --color-accent-pressed: #000000; --color-accent-text: #111111; --color-on-accent: #FFFFFF; --color-kbd-inset: #FFFFFF; --color-success: #147839; --color-success-marker: #15803D; --color-warning: #AA4E09; --color-warning-marker: #B45309; --color-danger: #CB2323; --color-danger-marker: #DC2626; --color-info: #1D4ED8; color-scheme: light; }
 /* The mail header rows: a 12px mono label, the field, its toggle (Reply-To, Preview text) at the right; no rules. The
    row being typed in takes the sheet's hover step. Labels line up with the email's text, 40px in. */
 .campaign-compose-metadata { flex-shrink: 0; padding-bottom: var(--space-16); color: var(--color-text); }
@@ -109,10 +108,9 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 /* Reduced motion: the rows still fade (no travel), the chevrons simply turn. */
 @media (prefers-reduced-motion: reduce) { .campaign-compose-preview { transition: opacity 150ms ease-out; } .campaign-compose-preview > div > *, .campaign-compose-row > .ui-button svg, .campaign-pacing-toggle svg { transition: none; } }
 .campaign-review > * { flex-shrink: 0; }
-.campaign-review-layout { display: grid; grid-template-columns: minmax(0, 430fr) minmax(0, 658fr); grid-template-rows: auto 1fr; grid-template-areas: 'recipients message' 'delivery message'; align-items: start; column-gap: var(--space-40); row-gap: var(--space-24); }
+.campaign-review-layout { display: grid; grid-template-columns: minmax(0, 430fr) minmax(0, 658fr); grid-template-areas: 'recipients message'; align-items: start; column-gap: var(--space-40); row-gap: var(--space-24); }
 .campaign-recipients { grid-area: recipients; }
 .campaign-message { grid-area: message; }
-.campaign-delivery { grid-area: delivery; }
 /* The sent email on its matte (a recessed solid surface, no edge line), as on a sent email's page. The frame's own
    padding draws it, so the loading box and the loaded email are one size. */
 .campaign-message .ui-email-preview { padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-matte); }
@@ -175,13 +173,8 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 @media (pointer: coarse) { .campaign-audience-summary > .campaign-summary-line { min-height: 44px; } }
 .campaign-audience-source { min-height: 20px; margin: 0; overflow: clip; text-overflow: ellipsis; white-space: nowrap; }
 
-.campaign-delivery { display: flex; flex-direction: column; gap: var(--space-16); padding-top: var(--space-24); }
-.campaign-delivery > .ui-section-header { margin-bottom: calc(var(--space-12) - var(--space-16)); }
-.campaign-delivery > .ui-field .ui-input { max-width: 240px; }
-.campaign-delivery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
-.campaign-delivery-reason { flex: 1 1 240px; margin: 0 0 0 var(--space-8); color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
 @media (max-width: 1050px) {
-  .campaign-review-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: 'recipients' 'message' 'delivery'; row-gap: var(--space-24); }
+  .campaign-review-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: 'recipients' 'message'; row-gap: var(--space-24); }
   .campaign-review-layout > * + * { padding-top: var(--space-24); }
 }
 @media (max-width: 640px) {
@@ -347,7 +340,7 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
   .campaign-compose-workspace { padding-inline-end: var(--studio-panel); }
   .campaign-compose-workspace:has(.composer-inspector[data-closed]) { padding-inline-end: 0; }
 }
-/* Review: the same bar, then recipients, the message and delivery with room between them. */
+/* Review: the same bar, then recipients and the message with room between them. */
 .campaign-review { display: flex; flex-direction: column; min-height: 100%; }
 .campaign-review__body { padding: var(--space-32); }
 /* Review: four numbered stages (recipients, message, checks, send), one open at a time. The open stage fills

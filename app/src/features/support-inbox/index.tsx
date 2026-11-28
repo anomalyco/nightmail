@@ -15,8 +15,8 @@ import { channelOf, InboxTabs, InboxToolbar, inboxColumnDefs, SupportInboxSkelet
 export { SupportConversationPage } from './conversation'
 
 // The support inbox (lazy, /support): Nightmail staff triage every support conversation. Needs you (the default) is
-// what only a person can move forward, most urgent first (api/src/support-inbox.ts); AI handling is what the agent owes
-// the next message in; Waiting on customer has been answered; Done and All. Each row previews the last message itself.
+// what only a person can move forward, most urgent first (api/src/support-inbox.ts); All is every conversation. Each row
+// previews the last message itself.
 // A conversation opens as a chat (conversation.tsx). Keyboard first: j and k move, Enter or o opens, Esc goes back,
 // r replies, n adds a note, e marks done (and moves on; Undo on its toast), h hands back, u marks read or unread,
 // / searches, ? lists the keys. In the list the selected row and the focused one are always the same, so a key acts on

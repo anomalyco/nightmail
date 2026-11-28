@@ -9,7 +9,6 @@ import { queries } from '../../data/queries'
 import { usePrefetchQueries } from '../../data/prefetch'
 import { ApiError, type DnsRecord, type Domain, type MailboxDomain, type ReceivingHost } from '../../data/types'
 import { productName } from '../../../../api/src/brand'
-import { request } from '../../data/live'
 import { domainPattern, normalizeDomain } from '../../lib/domain'
 import { mxTone, receivingStatus } from '../inbound/status'
 import { receivingIssueReason, receivingIssueTitle } from './receiving-issue-title'
@@ -265,7 +264,7 @@ function DomainDetail() {
     void forgetDomain(client, id).catch(() => {})
   }
   if (domain.isPending || (!domain.error && (dns.pending || (multiTenant && ((receiving.isPending && !receiving.error) || (hosts.isPending && !hosts.error)))))) return <DomainDetailSkeleton />
-  if (domain.error) return <div className="stack domain-page"><PageHeader title="Domain" backTo="/domains" /><ErrorState error={domain.error} onRetry={() => void domain.refetch()} /></div>
+  if (domain.error) return <div className="stack"><PageHeader title="Domain" backTo="/domains" /><ErrorState error={domain.error} onRetry={() => void domain.refetch()} /></div>
   const current = domain.data
   const state = domainState(current)
   const receivingRecord = recordsFor(current, 'receiving')[0]
@@ -276,7 +275,7 @@ function DomainDetail() {
   // Check now's answers, or until it is pressed the background check's that the domain's reads carry (domain-setup-alert.tsx).
   const pressed = checks?.id === id ? checks.found : undefined, gap = setupGap(current, pressed)
   if (current.builtIn) return <BuiltinDomainDetail domain={current} backTo={then || '/domains'} />
-  return <div className="stack domain-page">
+  return <div className="stack">
     <PageHeader title={current.name} backTo={then || '/domains'} actions={<>
       <StatusBadge status={state.status} tone={state.tone} />
       <Button className="domain-check" disabled={resting} aria-busy={verify.isPending || undefined} onClick={() => void checkNow()} data-analytics="domains/check"><span data-active={!resting || undefined}>Check now</span><span data-active={resting || undefined} aria-hidden={!resting || undefined}>Checking…</span></Button>
@@ -319,7 +318,7 @@ function DomainDetail() {
 function BuiltinDomainDetail({ domain, backTo }: { domain: Domain; backTo: string }) {
   const builtin = useSession()?.identity?.connection?.builtinDomain
   const state = domainState(domain)
-  return <div className="stack domain-page">
+  return <div className="stack">
     <PageHeader title={domain.name} backTo={backTo} actions={<><BuiltinBadge /><StatusBadge status={state.status} tone={state.tone} /></>} />
     <div className="domain-sections">
       <section className="section stack" aria-label="Built-in domain">

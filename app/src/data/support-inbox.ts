@@ -5,8 +5,8 @@ import type { Brief as SupportBrief, HeldReason, InboxCounts, SupportApproval, S
 // The support inbox (/v1/operator/support-inbox, api/src/support-inbox.ts, shared contract api/src/support-contract.ts):
 // every support conversation, for Nightmail staff. Like the rest of the operator API it is left out of the public SDK,
 // so the inbox calls it with the dashboard's own request helper. Its views: Needs you (what only a person can move
-// forward, most urgent first), AI handling (the agent owes the next message), Waiting on customer, Done and All.
-export type InboxView = 'needs_you' | 'agent' | 'waiting' | 'done' | 'all'
+// forward, most urgent first) and All.
+export type InboxView = 'needs_you' | 'all'
 export type { Channel, HeldReason, InboxCounts, SupportApproval, SupportAuthor, SupportBrief, SupportConversation, SupportDetail, SupportEmail, SupportEmailFull, SupportEvent, SupportEventKind, SupportInboxPage, SupportMessage, SupportTicket, SupportWorkspace, TriageReason }
 export const channelLabels: Record<Channel, string> = { chat: 'Chat', email: 'Email', agent_feedback: 'Agent feedback' }
 export type SupportAction = 'pause' | 'resume' | 'resolve'
@@ -74,17 +74,7 @@ export function triage(c: SupportConversation): SupportConversation['needsYou'] 
   if (!reasons.length) return null
   return { reasons, urgent: (ticket && c.ticket?.severity === 'P1') || failed || noReply || (c.lastAuthor === 'customer' && (paused || blocked)), since: c.needsYou?.since ?? new Date().toISOString() }
 }
-/** The agent or staff wrote last (a held draft wasn't sent), so the customer has the next word. */
-const answered = (c: SupportConversation) => (c.lastAuthor === 'agent' || c.lastAuthor === 'staff') && !c.preview?.held
-export function inView(c: SupportConversation, view: InboxView) {
-  switch (view) {
-    case 'all': return true
-    case 'needs_you': return c.needsYou !== null
-    case 'agent': return c.status !== 'closed' && c.channel !== 'agent_feedback' && c.agentState === 'active' && c.needsYou === null && !c.done && !answered(c)
-    case 'waiting': return c.status !== 'closed' && c.channel !== 'agent_feedback' && c.needsYou === null && !c.done && answered(c)
-    case 'done': return c.needsYou === null && (c.done !== null || c.status === 'closed' || (c.channel === 'agent_feedback' && Boolean(c.ticket?.resolvedAt)))
-  }
-}
+export const inView = (c: SupportConversation, view: InboxView) => view === 'all' || c.needsYou !== null
 const inList = (c: SupportConversation, key: readonly unknown[]) => inView(c, key[2] as InboxView) && (!key[4] || c.channel === key[4])
 
 type ListData = InfiniteData<SupportInboxPage, string | undefined>
@@ -96,14 +86,13 @@ export function patchConversation(client: QueryClient, conversationId: string, c
   before ??= detail?.conversation
   if (!before) return
   const predicted = change(before), changed = { ...predicted, needsYou: triage(predicted) }
-  const moved = (view: InboxView) => Number(inView(changed, view)) - Number(inView(before, view))
-  const delta = { needsYou: moved('needs_you'), agent: moved('agent'), waiting: moved('waiting') }
+  const delta = Number(inView(changed, 'needs_you')) - Number(inView(before, 'needs_you'))
   for (const [key, data] of client.getQueriesData<ListData>({ queryKey: inboxKeys.lists })) {
     if (!data) continue
     client.setQueryData<ListData>(key, {
       ...data,
       pages: data.pages.map(page => ({
-        ...page, counts: { needsYou: Math.max(0, page.counts.needsYou + delta.needsYou), agent: Math.max(0, page.counts.agent + delta.agent), waiting: Math.max(0, (page.counts.waiting ?? 0) + delta.waiting) },
+        ...page, counts: { ...page.counts, needsYou: Math.max(0, page.counts.needsYou + delta) },
         data: page.data.flatMap(c => c.id !== conversationId ? [c] : inList(changed, key) ? [changed] : []),
       })),
     })

@@ -99,11 +99,6 @@ export function OnboardingPage({ stage }: { stage: NonNullable<OnboardingStage> 
 // Each step stands on its own heading: no step indicator. A step with somewhere to go back to has a Back link at its top.
 type View = 'loading' | 'choose' | 'connect' | 'domain' | 'imported' | 'records' | 'start' | 'error'
 const rise = (index: number) => ({ '--i': index }) as CSSProperties
-// Older APIs return no count; a list is accepted too.
-function importedCount(connection: ProviderConnection | null | undefined) {
-  const value = (connection as { importedDomains?: unknown } | null | undefined)?.importedDomains
-  return typeof value === 'number' ? value : Array.isArray(value) ? value.length : 0
-}
 // Connected stays on screen this long before Add domain takes over.
 const CONNECTED_HOLD_MS = 1400
 
@@ -198,7 +193,7 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
     return () => clearTimeout(timer)
   }, [awsPhase])
   const connectionState: ConnectionState | 'creating' = awsPhase === 'connected' ? 'ready' : current?.kind === 'byo' ? current.state : 'creating'
-  const imported = importedCount(connection.data)
+  const imported = connection.data?.importedDomains ?? 0
   // Hosted: the built-in domain comes with the connection, so DNS can wait. A connection just made carries no summary of it
   // until the session is read again (useConnectionCache), so the step waits for that read rather than showing the form first.
   const builtin = identity?.connection?.builtinDomain

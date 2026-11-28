@@ -5,7 +5,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 
 /** A key hint inside a control. */
 export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="ui-kbd onb-kbd" aria-hidden="true">{children}</kbd>
+  return <kbd className="ui-kbd" aria-hidden="true">{children}</kbd>
 }
 
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))

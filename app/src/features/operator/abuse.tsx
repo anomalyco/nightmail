@@ -74,7 +74,7 @@ export function AbuseView() {
     onLists: () => set(next => { next.set('view', 'lists'); next.delete('band'); next.delete('show') }) })
   return <SplitPane className="op-abuse" collapse="row" rail={<FacetRail label="Abuse views" groups={groups} />}>
     {view.lists ? <ListsView /> : view.alerts ? <Alerts /> : clusters.isError && !clusters.data ? <ErrorState error={clusters.error} onRetry={() => void clusters.refetch()} /> : <>
-      <DataTable className="op-table" loading={clusters.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} rowHref={row => `/operator/abuse/${row.id}`} columns={clusterColumns}
+      <DataTable loading={clusters.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} rowHref={row => `/operator/abuse/${row.id}`} columns={clusterColumns}
         empty={<EmptyState title={first && !first.monitoring ? 'Abuse monitoring is off' : view.band ? `No ${bandLabel[view.band].toLowerCase()}-risk clusters` : 'No related accounts found'} action={view.band ? <Button onClick={() => set(next => next.delete('band'))}>Show all</Button> : undefined} />} />
       {clusters.hasNextPage && <Button className="op-more" loading={clusters.isFetchingNextPage} onClick={() => void clusters.fetchNextPage()}>Load more</Button>}
       {clusters.isError && clusters.data && <Alert tone="danger"><ErrorText error={clusters.error} /></Alert>}
@@ -92,7 +92,7 @@ function Alerts() {
   const [shown, setShown] = useState<AbuseAlert | null>(null)
   if (alerts.isError && !alerts.data) return <ErrorState error={alerts.error} onRetry={() => void alerts.refetch()} />
   return <>
-    <DataTable className="op-table" loading={alerts.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} onRowClick={setShown} columns={alertColumns(setShown, delivery === 'slack')} empty={<EmptyState title="No alerts yet" />} />
+    <DataTable loading={alerts.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} onRowClick={setShown} columns={alertColumns(setShown, delivery === 'slack')} empty={<EmptyState title="No alerts yet" />} />
     {alerts.hasNextPage && <Button className="op-more" loading={alerts.isFetchingNextPage} onClick={() => void alerts.fetchNextPage()}>Load more</Button>}
     {alerts.isError && alerts.data && <Alert tone="danger"><ErrorText error={alerts.error} /></Alert>}
     {shown && <Dialog open onOpenChange={next => { if (!next) setShown(null) }} title="Slack card" footer={<><Button onClick={() => setShown(null)}>Close</Button><Link className="ui-button ui-button--primary ui-button--md" to={`/operator/abuse/${shown.clusterId}`}>Open cluster</Link></>}>
@@ -204,8 +204,8 @@ function ClusterBody({ cluster, alert, canAct, onAct }: { cluster: AbuseClusterD
           <span className="op-cell" title={linkText(link)}>{linkText(link)}</span></li>)}{shared.length > 12 && <li className="muted">and {number(shared.length - 12)} more</li>}</ul>
       </section>
     </div>
-    <section className="op-section"><SectionHeader title="Workspaces" /><DataTable className="op-table" rows={cluster.workspaces} rowKey={w => w.id} columns={workspaceColumns} empty={<EmptyState title="No workspaces" />} /></section>
-    <section className="op-section"><SectionHeader title="Accounts" /><DataTable className="op-table" rows={cluster.accounts} rowKey={a => a.key} columns={accountColumns} empty={<EmptyState title="No accounts" />} /></section>
+    <section className="op-section"><SectionHeader title="Workspaces" /><DataTable rows={cluster.workspaces} rowKey={w => w.id} columns={workspaceColumns} empty={<EmptyState title="No workspaces" />} /></section>
+    <section className="op-section"><SectionHeader title="Accounts" /><DataTable rows={cluster.accounts} rowKey={a => a.key} columns={accountColumns} empty={<EmptyState title="No accounts" />} /></section>
   </div>
 }
 const nodeName = (cluster: AbuseClusterDetail, key: string) => cluster.workspaces.find(w => w.id === key)?.name ?? key

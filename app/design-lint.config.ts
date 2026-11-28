@@ -35,7 +35,7 @@ const config = {
       use: 'Remove the line. Part areas by a solid step (background: var(--color-layer-1)) or by space (gap: var(--space-12)); show a picked or selected state with a fill (var(--color-active-bg), var(--color-contrast) on a picked control).',
       // A ring in the colour of the surface under it is a cut-out (an unread dot or a face set off from the icon or face
       // beside it), not a line.
-      cutoutColors: ['--color-surface', '--color-deep', '--color-canvas', '--color-overlay-surface'],
+      cutoutColors: ['--color-surface', '--color-deep', '--color-overlay-surface'],
       allow: [
         email,
         { files: ['src/features/ui-notes/notes.css'], selector: /\.uin-(outline|highlight)\b/, reason: 'UI notes outline the element being noted, on purpose (notes.css)' },
@@ -55,7 +55,7 @@ const config = {
       why: 'An area sits on the canvas or one step off it (--color-layer-1 and its aliases: well, card, thead, matte, a tone\'s -bg); a second shade only appears when a panel sits in a panel (tokens.css).',
       use: 'An area: var(--color-layer-1) (or --color-well, --color-card). A control: var(--color-control). A state: the scope\'s var(--color-hover), var(--color-active-bg) or var(--color-pressed). Inside a layer-1 surface, sit on it directly; its controls already take the raised set (app.css).',
       // The steps past the one (and lines' colours used as fills). A background reads only its token, not a var() fallback.
-      deeperTokens: ['--color-layer-2', '--color-layer-3', '--color-border-muted', '--color-border', '--color-border-strong', '--color-control-edge'],
+      deeperTokens: ['--color-layer-2', '--color-layer-3', '--color-border-muted', '--color-border', '--color-border-strong'],
       allow: [
         email,
         { selector: /track|[-_]bar\b|progress|meter|skeleton|placeholder|loading|__mark\b|avatar|__face\b|__more\b|thumb|\bimg\b|__icon\b|chip|__pill\b|blank|-label\b|dot\b|::before|::after|switch|file-selector-button|grab|kbd|number\b|ui-tone--neutral/, reason: 'marks, chips, avatars, placeholders and control tracks, sized to their content, not areas' },

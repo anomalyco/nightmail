@@ -20,7 +20,7 @@ const cx = (...values: Array<string | false | null | undefined>) => values.filte
 // end with it. A sign-out also forgets the conversations this tab saved.
 for (const type of ['nightmail:account-changed', 'nightmail:account-signed-out', 'nightmail:unauthorized', 'nightmail:support-reset']) window.addEventListener(type, event => {
   endSupport()
-  if (type !== 'nightmail:unauthorized' && type !== 'nightmail:support-reset' && (event as CustomEvent<{ signedOut?: boolean } | null>).detail?.signedOut !== false) forgetSaved(true)
+  if (type !== 'nightmail:unauthorized' && type !== 'nightmail:support-reset' && (event as CustomEvent<{ signedOut?: boolean } | null>).detail?.signedOut !== false) forgetSaved()
 })
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 /** The panel's own first line: shown at the top of the conversation once loaded, with no model call. */

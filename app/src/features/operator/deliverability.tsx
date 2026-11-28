@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router'
 import { ArrowUpRight } from 'lucide-react'
 import { ErrorState, StatusBadge, type Tone } from '../../components/ui'
 import { operatorApi, type Deliverability, type DeliverabilityCounts, type MailProvider, type VdmCounts } from '../../data/operator'
-import { date, number, percent } from '../../lib/format'
+import { date, number } from '../../lib/format'
 import { DELIVERABILITY_WINDOWS, DeliverabilityBoard, DeliverabilityControls, deliverabilitySettings, GLASS_REGION_SLOTS, type DeliverabilityFill, type DeliverabilityRow, type DeliverabilityStream, type GlassFill, type GlassTileFill } from './skeletons'
 import { delta, points, rateText, since, Tick, type Periods } from './glass'
 

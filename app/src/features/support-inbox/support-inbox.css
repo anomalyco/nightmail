@@ -9,7 +9,6 @@
 .sinbox-toolbar { justify-content: space-between; }
 .sinbox-toolbar .sinbox-channel-select { width: 156px; }
 .sinbox-more { align-self: flex-start; margin-top: var(--space-12); }
-.sinbox-cell { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The list: dense rows like the log stream; who and what in the body face, everything else in small mono. */
 .sinbox-table { --table-row-height: var(--row-height-dense); }

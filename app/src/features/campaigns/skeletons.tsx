@@ -35,19 +35,6 @@ export const templateColumns: SkeletonColumn[] = [
   { key: 'action', label: '', width: 150, align: 'right', skeleton: <span />, card: 'end' },
 ]
 
-export function CampaignAudienceSkeleton() {
-  return <LoadingRegion label="Loading audience" className="campaign-audience-review-skeleton">
-    <p className="campaign-audience-source"><SkeletonText width={120} /></p>
-    <div className="campaign-audience-summary">
-      <div className="campaign-summary-line"><strong>Eligible recipients</strong><SkeletonText width={45} /></div>
-      <div className="campaign-summary-line"><span>Matched contacts</span><SkeletonText width={45} /></div>
-      <div className="campaign-summary-line muted"><span>Suppressed</span><SkeletonText width={35} /></div>
-      <div className="campaign-summary-line muted"><span>Not subscribed</span><SkeletonText width={35} /></div>
-    </div>
-    <Button disabled>Refresh count</Button>
-  </LoadingRegion>
-}
-
 // The composer's tools and panel as the editor opens them (EmailComposer, disabled until it is ready), so the studio's
 // rail (from 900 px) and its docked Style panel (from 1150 px) are in place from the first frame; below 900 px
 // the toolbar row on the sheet. Outside the studio (a preview dialog) only the toolbar row and the canvas show. With a
