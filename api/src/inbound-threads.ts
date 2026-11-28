@@ -15,7 +15,7 @@ import { mailboxMessages as links, mailboxThreads, mailAttachments, mailMessages
 import { oneOf } from './domain-mail.js';
 import { accessibleMessages, EmailThread, liveBox, threadBlock, threadView, visibleLinks, type Filter, type RawThread } from './thread-view.js';
 import { replyText } from './mailbox-store.js';
-import { safeMailText } from './inbox-content.js';
+import { displayText, safeMailText } from './inbox-content.js';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { archiveMailboxFiles, sendFromMailbox, finishMailboxArchive, type OutgoingMessage } from './mailbox-send.js';
 import { idempotent, idempotentRequest, SendIdempotencyHeaders } from './idempotency.js';
@@ -221,7 +221,7 @@ async function threadPage(db: DbExecutor, value: MailboxAccess, filter: Filter, 
         JOIN mail_messages m ON m.id=detail.latest_id ORDER BY threads.last_at DESC, threads.id DESC`);
   }
   const last = rows.rows[options.limit - 1];
-  return { data: rows.rows.slice(0, options.limit).map(row => ({ id: row.id, subject: row.subject, snippet: row.snippet, from: { name: row.from_name, address: row.from_address }, lastMessageAt: timestamp(row.at), addressIds: row.address_ids, messageCount: row.message_count })),
+  return { data: rows.rows.slice(0, options.limit).map(row => ({ id: row.id, subject: displayText(row.subject), snippet: displayText(row.snippet), from: { name: row.from_name === null ? null : displayText(row.from_name), address: row.from_address }, lastMessageAt: timestamp(row.at), addressIds: row.address_ids, messageCount: row.message_count })),
     nextCursor: rows.rows.length > options.limit && last ? encodeCursor(last.at, last.id) : null };
 }
 
@@ -244,14 +244,20 @@ function publicVerdicts(verdicts: Verdicts): Record<string, string | boolean> {
   return out;
 }
 function messageView(row: Pick<typeof messages.$inferSelect, Exclude<keyof typeof messageFields,'simulated'>> & {simulated?:boolean;verdicts?:Verdicts} & MessageCounts, addressIds: string[], read = true) {
-  const { text, hiddenContent } = safeMailText(row.text, row.html);
+  const body = safeMailText(row.text, row.html);
+  let hiddenContent = body.hiddenContent;
+  const clean = (s: string) => { const out = displayText(s); if (out !== s) hiddenContent = true; return out; };
+  const cleanAddress = <T extends { name: string | null; address: string }>(a: T) => ({ ...a, name: a.name === null ? null : clean(a.name) });
+  const reply = replyText(body.text);
+  // Recompute snippet from safe body text for HTML-only rows so rows stored before safeMailText never leak hidden HTML.
+  const snippet = row.text == null && row.html != null ? reply.replace(/\s+/g, ' ').trim().slice(0, 200) : clean(row.snippet);
   const toCount = Math.max(row.to.length, row.toCount ?? row.verdicts?.toCount ?? 0);
   const ccCount = Math.max(row.cc.length, row.ccCount ?? row.verdicts?.ccCount ?? 0);
   const replyToCount = Math.max(row.replyTo.length, row.replyToCount ?? row.verdicts?.replyToCount ?? 0);
   const referencesCount = Math.max(row.references.length, row.referencesCount ?? row.verdicts?.referencesCount ?? 0);
   return { simulated:row.simulated??row.verdicts?.simulated??false,id: row.id, threadId: row.threadId, addressIds, direction: row.direction, status: row.status, read, errorCode:row.errorCode, suppressionReason:row.suppressionReason,
-    from: { name: row.fromName, address: row.fromAddress }, to: row.to, toCount, cc: row.cc, ccCount, replyTo: row.replyTo, replyToCount, subject: row.subject, snippet: row.snippet,
-    text, replyText: replyText(text), receivedAt: timestamp(row.receivedAt), bodyTruncated: row.bodyTruncated, hiddenContent, attachmentCount: row.attachmentCount,
+    from: { name: row.fromName === null ? null : clean(row.fromName), address: row.fromAddress }, to: row.to.map(cleanAddress), toCount, cc: row.cc.map(cleanAddress), ccCount, replyTo: row.replyTo.map(cleanAddress), replyToCount, subject: clean(row.subject), snippet,
+    text: body.text, replyText: reply, receivedAt: timestamp(row.receivedAt), bodyTruncated: row.bodyTruncated, hiddenContent, attachmentCount: row.attachmentCount,
     emailId: row.sendingEmailId, messageId: row.messageId, inReplyTo: row.inReplyTo, references: row.references, referencesCount };
 }
 type PageMsgRow = {
@@ -464,9 +470,9 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
         at: r.at,
         item: {
           simulated: r.simulated, id: r.id, threadId: r.thread_id, direction: r.direction, status: r.status, suppressionReason: r.suppression_reason,
-          subject: r.subject, snippet: r.snippet, receivedAt: timestamp(r.at), attachmentCount: r.attachment_count,
-          from: { name: r.from_name, address: r.from_address }, addressIds: r.address_ids,
-          ...(withDel ? { region: r.region ?? null, spam: r.spam ?? false, to: r.to ?? [], toCount: r.to_count ?? 0, envelopeTo: r.envelope_to ?? [], envelopeToCount: r.envelope_to_count ?? 0, addresses: r.addresses ?? [] } : {}),
+          subject: displayText(r.subject), snippet: displayText(r.snippet), receivedAt: timestamp(r.at), attachmentCount: r.attachment_count,
+          from: { name: r.from_name === null ? null : displayText(r.from_name), address: r.from_address }, addressIds: r.address_ids,
+          ...(withDel ? { region: r.region ?? null, spam: r.spam ?? false, to: (r.to ?? []).map(a => ({ ...a, name: a.name === null ? null : displayText(a.name) })), toCount: r.to_count ?? 0, envelopeTo: r.envelope_to ?? [], envelopeToCount: r.envelope_to_count ?? 0, addresses: r.addresses ?? [] } : {}),
         },
       }));
       const fitted = fitPageByBytes(mapped, candidateCount > mapped.length, PAGE_MAX_BYTES, 256);

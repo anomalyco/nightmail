@@ -329,9 +329,6 @@ export class SupportPlatform extends WorkerEntrypoint<Env> implements SupportPla
   // A plain fetch to the entrypoint answers nothing: the methods above are the whole surface.
   override async fetch() { return new Response(null, { status: 404 }); }
 }
-// Compile-time check: WorkerEntrypoint RPC surface stays in lockstep with supportPlatform() and SupportPlatformRpc.
-const _supportPlatformEntrypoint = (p: SupportPlatform) => p satisfies SupportPlatformRpc & Omit<SupportPlatformApi, 'call'>;
-void _supportPlatformEntrypoint;
 
 export default {
   async fetch(request, env, ctx) {

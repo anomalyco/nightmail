@@ -5,7 +5,7 @@ import { ApiError, errors, isoTime, json, log, nextCursor, notFound, readCursor,
 import { auditInsert, operatorContext, operatorRequired } from './audit.js';
 import { signedUrl } from './inbound-threads.js';
 import { replyText } from './mailbox-store.js';
-import { safeMailText } from './inbox-content.js';
+import { displayText, safeMailText } from './inbox-content.js';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { plainText } from './plain-text.js';
 import { mutate, operatorActor, type OperatorIdentity } from './operator.js';
@@ -378,10 +378,13 @@ const emailOf = sql`(SELECT json_build_object('id', mm.id, 'subject', mm.subject
       FROM mail_attachments a WHERE a.message_id = mm.id))
   FROM mail_messages mm WHERE mm.id = m.source_message_id AND mm.direction = 'inbound')`;
 function email(row: EmailRow): z.infer<typeof EmailSource> {
-  const { text, hiddenContent } = safeMailText(row.text, row.html_text);
-  return { id: row.id, subject: row.subject, from: { name: row.from_name, address: row.from_address }, to: row.to.map(a => ({ name: a.name ?? null, address: a.address })),
-    cc: row.cc.map(a => ({ name: a.name ?? null, address: a.address })), receivedAt: isoTime(row.received_at)!, text: text.slice(0, EMAIL_TEXT_LIMIT), replyText: replyText(text).slice(0, EMAIL_TEXT_LIMIT),
-    textTruncated: row.body_truncated || row.text_length > EMAIL_TEXT_LIMIT || text.length > EMAIL_TEXT_LIMIT, hiddenContent, hasHtml: row.has_html,
+  const body = safeMailText(row.text, row.html_text);
+  let hiddenContent = body.hiddenContent;
+  const clean = (s: string) => { const out = displayText(s); if (out !== s) hiddenContent = true; return out; };
+  const cleanAddress = (a: { name: string | null; address: string }) => ({ name: a.name == null ? null : clean(a.name), address: a.address });
+  return { id: row.id, subject: clean(row.subject), from: cleanAddress({ name: row.from_name, address: row.from_address }), to: row.to.map(cleanAddress),
+    cc: row.cc.map(cleanAddress), receivedAt: isoTime(row.received_at)!, text: body.text.slice(0, EMAIL_TEXT_LIMIT), replyText: replyText(body.text).slice(0, EMAIL_TEXT_LIMIT),
+    textTruncated: row.body_truncated || row.text_length > EMAIL_TEXT_LIMIT || body.text.length > EMAIL_TEXT_LIMIT, hiddenContent, hasHtml: row.has_html,
     attachments: row.attachments.map(a => ({ id: a.id, filename: a.filename, contentType: a.contentType, size: a.size, inline: a.disposition === 'inline' && a.contentId !== null, available: row.clean })) };
 }
 const message = (m: MessageRow): z.infer<typeof Message> => {

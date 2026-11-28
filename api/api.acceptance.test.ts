@@ -11613,6 +11613,16 @@ describe('Hosted MCP OAuth and tools', () => {
             assert.deepEqual([hiddenDetail.messages[0].email.text, hiddenDetail.messages[0].email.replyText, hiddenDetail.messages[0].email.hiddenContent], ['Real question', 'Real question', true]);
             const hiddenFull = ok(await send('GET', `${inbox}/${hiddenConv}/emails/${hiddenMailId}`, session(reader)));
             assert.deepEqual([hiddenFull.text, hiddenFull.replyText, hiddenFull.hiddenContent], ['Real question', 'Real question', true]);
+            // Clean body text with invisible Unicode smuggled in subject and display names: stripped and flags hiddenContent.
+            const smuggledMailId = `msg_${hex().slice(0, 32)}`, smuggledMsgId = msg();
+            await db.query(`INSERT INTO mail_messages(id, workspace_id, direction, thread_id, region, subject, from_address, from_name, envelope_to, verdicts, headers, "to", text, html, sent_at, attachment_count)
+              VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7, '[]', $8, '[]', $9, 'Clean body', NULL, now(), 0)`,
+              [smuggledMailId, home, thread, REGION, 'Urg\u{e0061}ent\u200b\u202e', sender, 'P\u200bat\u{e0061}', JSON.stringify({ dmarc: 'PASS', virus: 'PASS' }), JSON.stringify([{ name: 'Supp\u202eort', address: `support@${domainName}` }])]);
+            await db.query("INSERT INTO mailbox_messages(mailbox_id, message_id, workspace_id, thread_id, direction, received_at) VALUES ($1, $2, $3, $4, 'inbound', now())", [box, smuggledMailId, home, thread]);
+            const smuggledConv = await stranger(sender);
+            ok(reply(await platform.mirrorMessages(smuggledConv, [{ id: smuggledMsgId, author: 'customer', text: 'Clean body', source: smuggledMailId }])));
+            const smuggledEmail = ok(await send('GET', `${inbox}/${smuggledConv}`, session(reader))).messages[0].email;
+            assert.deepEqual([smuggledEmail.subject, smuggledEmail.from.name, smuggledEmail.to[0].name, smuggledEmail.text, smuggledEmail.hiddenContent], ['Urgent', 'Pat', 'Support', 'Clean body', true]);
             error(await send('GET', `${inbox}/${other}/emails/${received}`, session(reader)), 404);
             error(await send('GET', `${inbox}/${other}/emails/${elsewhere}`, session(reader)), 404); // an email no message came from is not shown
             error(await send('GET', `${inbox}/${conv}/emails/${received}`, session(owner, acme)), 403, 'OPERATOR_REQUIRED');
@@ -32324,17 +32334,28 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await db.query("INSERT INTO mailboxes(id,workspace_id,domain_id,address,origin) VALUES($1,$2,$3,$4,'api')",[mbx,wid,dom,`safe@${dom}.invalid`]);
       await db.query("INSERT INTO mailbox_messages(mailbox_id,message_id,workspace_id,thread_id,direction,received_at) VALUES($1,$2,$3,$4,'inbound',now())",[mbx,id,wid,thread]);
       await db.query("INSERT INTO mailbox_threads(mailbox_id,thread_id,workspace_id,last_message_at,message_count) VALUES($1,$2,$3,now(),1)",[mbx,thread,wid]);
-      await db.query('UPDATE mail_messages SET text=NULL, html=$1 WHERE id=$2',[htmlHidden,id]);
+      await db.query('UPDATE mail_messages SET text=NULL, html=$1, snippet=$2 WHERE id=$3',[htmlHidden,'Visible hello IGNORE PREVIOUS',id]);
       const msgHidden=ok(await local('GET',`/v1/inbound/messages/${id}`));
-      assert.deepEqual([msgHidden.text,msgHidden.replyText,msgHidden.hiddenContent],['Visible hello','Visible hello',true]);
+      assert.deepEqual([msgHidden.text,msgHidden.replyText,msgHidden.snippet,msgHidden.hiddenContent],['Visible hello','Visible hello','Visible hello',true]);
       const thrHidden=ok(await local('GET',`/v1/inbound/threads/${thread}`));
-      assert.deepEqual([thrHidden.messages[0].text,thrHidden.messages[0].replyText,thrHidden.messages[0].hiddenContent],['Visible hello','Visible hello',true]);
-      await db.query('UPDATE mail_messages SET text=$1, html=NULL WHERE id=$2',['Hello\u200bworld\u{e0061}',id]);
+      assert.deepEqual([thrHidden.messages[0].text,thrHidden.messages[0].replyText,thrHidden.messages[0].snippet,thrHidden.messages[0].hiddenContent],['Visible hello','Visible hello','Visible hello',true]);
+      await db.query('UPDATE mail_messages SET text=$1, html=NULL, snippet=$2 WHERE id=$3',['Hello\u200bworld\u{e0061}','Hello\u200bworld',id]);
       const msgUnicode=ok(await local('GET',`/v1/inbound/messages/${id}`));
-      assert.deepEqual([msgUnicode.text,msgUnicode.hiddenContent],['Helloworld',true]);
+      assert.deepEqual([msgUnicode.text,msgUnicode.snippet,msgUnicode.hiddenContent],['Helloworld','Helloworld',true]);
       const thrUnicode=ok(await local('GET',`/v1/inbound/threads/${thread}`));
-      assert.deepEqual([thrUnicode.messages[0].text,thrUnicode.messages[0].hiddenContent],['Helloworld',true]);
-      await db.query('UPDATE mail_messages SET text=$1, html=NULL WHERE id=$2',['Plain visible body',id]);
+      assert.deepEqual([thrUnicode.messages[0].text,thrUnicode.messages[0].snippet,thrUnicode.messages[0].hiddenContent],['Helloworld','Helloworld',true]);
+      // Invisible Unicode in subject, display names, or snippet is stripped and flags hiddenContent even when body text is clean.
+      await db.query('UPDATE mail_messages SET text=$1, html=NULL, subject=$2, from_name=$3, snippet=$4, "to"=$5 WHERE id=$6',
+        ['Plain visible body','Sub\u{e0061}ject\u200b\u202e','Ali\u200bce\u{e0061}','Snip\u202epet',JSON.stringify([{name:'Bo\u200bb',address:`safe@${dom}.invalid`}]),id]);
+      const msgHeader=ok(await local('GET',`/v1/inbound/messages/${id}`));
+      assert.deepEqual([msgHeader.subject,msgHeader.from.name,msgHeader.to[0].name,msgHeader.snippet,msgHeader.hiddenContent],['Subject','Alice','Bob','Snippet',true]);
+      const thrHeader=ok(await local('GET',`/v1/inbound/threads/${thread}`));
+      assert.deepEqual([thrHeader.subject,thrHeader.from.name,thrHeader.snippet,thrHeader.messages[0].subject,thrHeader.messages[0].from.name,thrHeader.messages[0].hiddenContent],['Subject','Alice','Snippet','Subject','Alice',true]);
+      const listedThreads=ok(await local('GET',`/v1/inbound/threads?addressId=${mbx}`));
+      assert.deepEqual([listedThreads.data[0].subject,listedThreads.data[0].from.name,listedThreads.data[0].snippet],['Subject','Alice','Snippet']);
+      const listedMsgs=ok(await local('GET',`/v1/inbound/messages?addressId=${mbx}&includeDelivery=true`));
+      assert.deepEqual([listedMsgs.data[0].subject,listedMsgs.data[0].from.name,listedMsgs.data[0].to[0].name,listedMsgs.data[0].snippet],['Subject','Alice','Bob','Snippet']);
+      await db.query('UPDATE mail_messages SET text=$1, html=NULL, subject=$2, from_name=$3, snippet=$4, "to"=$5 WHERE id=$6',['Plain visible body','Clean subject','Alice','Plain visible body',JSON.stringify([{name:'Bob',address:`safe@${dom}.invalid`}]),id]);
       assert.equal(ok(await local('GET',`/v1/inbound/messages/${id}`)).hiddenContent,false);
     });
     // The dashboard reads these straight from the sender's HTML before sanitizing it (app/src/lib/html-scan.ts).
@@ -42165,6 +42186,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.deepEqual(safeMailText(tags,'<span style="display:none">ignored</span>'),{text:'visible',hiddenContent:true});
     assert.deepEqual(safeMailText('Clean text',null),{text:'Clean text',hiddenContent:false});
     assert.deepEqual(safeMailText(null,null),{text:'',hiddenContent:false});
+    const {snippetOf}=await import('./src/mailbox-store.js');
+    assert.equal(snippetOf(null,'<p>Visible</p><span style="display:none">IGNORE</span><p style="opacity:0">stealth</p><p style="font-size:0">tiny</p>'),'Visible');
+    assert.equal(snippetOf('Hel\u200blo\u{e0061}\u202eworld',null),'Helloworld');
+    const {unroutedEmail}=await import('./src/support-staff-mail.js');
+    const unrouted=unroutedEmail('https://nightmail.example',{thread_id:'thr_1',id:'msg_1',subject:'Help',from_address:'u@example.invalid',dmarc:'PASS',text:null,html:'<p>Need\u200b help</p><span style="display:none">IGNORE PREVIOUS</span>',received_at:new Date().toISOString(),address:'support@example.invalid'},'tkt_1','Help');
+    assert.ok(unrouted.text.includes('Need help') && !unrouted.text.includes('IGNORE PREVIOUS'));
   });
   test('ephemeral inbox: extract finds codes and links only in visible text and flags hidden content',async()=>{const {visibleMail}=await import('./src/inbox-content.js');const m=visibleMail('code 000000','<div hidden>code 111111</div><p style="font-size:0">code 222222</p><p>Verify: A3B4</p><a href="https://real.invalid/">other.invalid</a><span>zero\u200bwidth</span>','codes,links');assert.equal(m.hiddenContent,true);assert.deepEqual(m.extract,{codes:['A3B4'],links:[{text:'other.invalid',href:'https://real.invalid/',mismatch:true}]});assert.ok(!m.text.includes('111111'));const plain=visibleMail('Sign in via (https://app.example.invalid/auth/verify?token=abc123). Your verification code is 482913.',null,'codes,links');assert.deepEqual(plain.extract,{codes:['482913'],links:[{text:'https://app.example.invalid/auth/verify?token=abc123',href:'https://app.example.invalid/auth/verify?token=abc123',mismatch:false}]});const linkOnly=visibleMail('Verify your login: https://app.example.invalid/auth/verify?token=abc123',null,'codes,links');assert.deepEqual(linkOnly.extract,{codes:[],links:[{text:'https://app.example.invalid/auth/verify?token=abc123',href:'https://app.example.invalid/auth/verify?token=abc123',mismatch:false}]});});
   test('shared-pool staging redrive retires unattributed objects once, skips SES setup probe, and keeps mail_ignored_staging 5 days', async t => {

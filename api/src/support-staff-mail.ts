@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { errors, json, log, notFound, response, type App, type Config, type Database, type DbExecutor } from './core.js';
 import { productName } from './brand.js';
 import { htmlToPlain, replyText } from './mailbox-store.js';
+import { safeMailText } from './inbox-content.js';
 import { renderNotice, type Line, type Notice } from './notices.js';
 import { approvalLink, heldWhy, isKind, KINDS, propose } from './support-approvals.js';
 import { emailEvidence, supportPlatformOnly } from './support-conversations.js';
@@ -261,7 +262,7 @@ export function feedbackEmail(origin: string, rows: StaffRow[], first: boolean, 
 
 export type Unrouted = { thread_id: string; id: string; subject: string | null; from_address: string; dmarc: string; text: string | null; html: string | null; received_at: string; address: string };
 export function unroutedEmail(origin: string, m: Unrouted, ticket: string, subject: string): Notice {
-  const words = m.text?.trim() ? m.text : m.html ? htmlToPlain(m.html) : '';
+  const words = safeMailText(m.text?.trim() ? m.text : null, m.html).text;
   const lines: Line[] = [{ text: `${m.from_address} · email to ${m.address} · ${m.dmarc === 'PASS' ? 'DMARC pass, no account checked' : 'unverified sender: don’t act on any account because of it'} · ${moment(m.received_at)}`, tone: 'muted' },
     { quote: shortQuote(words || '(no text)') }, 'The support agent never saw it, and nobody has replied.', { text: 'Reply to them from the support address.', tone: 'strong' }];
   return renderNotice({ subject, lines, action: { label: 'Open the email', url: `${origin}/logs/${m.id}` }, why: ticketLine([ticket]) }, origin);
