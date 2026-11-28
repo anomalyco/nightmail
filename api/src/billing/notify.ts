@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { isSimulatedSes, log, type JobHandler } from '../core.js';
 import { retryDatabaseFailures } from '../jobs.js';
-import { deliverNotice, heldNotice, noticeFailed } from '../account-notices.js';
+import { deliverNotice, heldNotice, noticeFailed, noticeRecipients } from '../account-notices.js';
 import { customerNotice, type Notice, type NoticeInput } from '../notices.js';
 import { formatUsd, microCents, RATES, type MicroCents } from './money.js';
 import type { NoticeKind } from './types.js';
@@ -60,12 +60,12 @@ type Row = { id: string; kind: NoticeKind; data: Record<string, unknown>; enforc
 export const notifyJob: JobHandler = retryDatabaseFailures(async (runtime, payload, job) => {
   const noticeId = typeof payload.noticeId === 'string' ? payload.noticeId : '';
   // The lease: one runner at a time, and a crashed send is retried after 5 minutes. Everything the email needs comes
-  // back with it: the enforcement, the account's mode and position, and up to 20 owners and admins.
+  // back with it: the enforcement, the account's mode and position, and up to 20 owners and admins with a verified address.
   const { rows: [notice] } = await runtime.db.execute<Row>(sql`WITH leased AS (
       UPDATE billing_notices SET status='sending',lease_until=now()+interval '5 minutes'
       WHERE id=${noticeId} AND workspace_id=${job.workspaceId} AND (status='pending' OR (status='sending' AND lease_until<now())) RETURNING id,kind,data,workspace_id)
     SELECT l.id,l.kind,l.data,c.mode AS enforcement,c.receive_hold,coalesce(a.mode,'prepaid') AS mode,a.unpaid_since,w.name,billing_position(l.workspace_id) AS position,
-      ARRAY(SELECT u.email FROM workspace_members m JOIN nightmail_users u ON u.id=m.user_id WHERE m.workspace_id=l.workspace_id AND m.role IN ('owner','admin') ORDER BY u.email LIMIT 20) AS recipients
+      ${noticeRecipients(sql`l.workspace_id`)} AS recipients
     FROM leased l CROSS JOIN billing_config c LEFT JOIN billing_accounts a ON a.workspace_id=l.workspace_id LEFT JOIN workspaces w ON w.id=l.workspace_id WHERE c.singleton`);
   if (!notice) return heldNotice(runtime.db, 'billing_notices', noticeId);
   const settle = (status: 'sent' | 'suppressed' | 'failed') => runtime.db.execute(sql`UPDATE billing_notices SET status=${status},lease_until=NULL,sent_at=CASE WHEN ${status}='sent' THEN now() END

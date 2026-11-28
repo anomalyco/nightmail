@@ -3477,7 +3477,7 @@ export const createEndpoint = <ThrowOnError extends boolean = false>(options: Op
 /**
  * Delete an endpoint
  *
- * Delete an endpoint no rule or route uses.
+ * Delete an endpoint no rule or route uses. An MCP approval deletes only endpoints it created (403 ENDPOINT_NOT_OWNED).
  */
 export const deleteEndpoint = <ThrowOnError extends boolean = false>(options: Options<DeleteEndpointData, ThrowOnError>): RequestResult<DeleteEndpointResponses, DeleteEndpointErrors, ThrowOnError> => (options.client ?? client).delete<DeleteEndpointResponses, DeleteEndpointErrors, ThrowOnError>({
     security: [
@@ -3523,7 +3523,7 @@ export const getEndpoint = <ThrowOnError extends boolean = false>(options: Optio
 /**
  * Edit an endpoint
  *
- * Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.
+ * Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead. An MCP approval edits only endpoints it created that no other owner’s rule or route uses (403 ENDPOINT_NOT_OWNED).
  */
 export const updateEndpoint = <ThrowOnError extends boolean = false>(options: Options<UpdateEndpointData, ThrowOnError>): RequestResult<UpdateEndpointResponses, UpdateEndpointErrors, ThrowOnError> => (options.client ?? client).patch<UpdateEndpointResponses, UpdateEndpointErrors, ThrowOnError>({
     security: [

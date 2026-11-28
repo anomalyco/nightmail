@@ -381,7 +381,7 @@ function rules(sheet: string, out: Rule[]) {
     if (!prelude || prelude.startsWith('@')) continue;
     const parsed = declarations(body);
     if (!parsed.length) continue;
-    for (const text of prelude.split(',')) {
+    for (const { text } of selectorList(prelude)) {
       if (out.length >= MAX_RULES) break;
       const selector = parseSelector(text.replace(/\s+/g, ' ').trim());
       if (selector) out.push({ selector, declarations: parsed, order: out.length });
@@ -542,18 +542,68 @@ function survey(root: Element): Map<Element, Facts> {
   return tree;
 }
 
+export type CssRule = { prelude: string; decls: [string, string][] };
+/** Past the string literal that starts at i: its closing quote, the end of its line, or the end of the text. */
+export function stringEnd(css: string, i: number) {
+  for (let j = i + 1; j < css.length; j++) { if (css[j] === '\\') j++; else if (css[j] === css[i] || css[j] === '\n') return j + 1; }
+  return css.length;
+}
+/** A declaration's name as a client reads it: escapes decoded, case folded except for a custom property's. */
+const propertyName = (raw: string) => { const name = unescapeCss(raw.trim()); return name.startsWith('--') ? name : name.toLowerCase(); };
+/** Every rule's selector and declarations, those inside at-rules included; root collects bare declarations (a style attribute's).
+ *  An at-rule nested in a style rule (CSS nesting: img { @media all { width: 2000px } }) applies to that rule's
+ *  selectors, and so takes them as its prelude, as does a nested style rule's own; @scope's bare declarations apply to
+ *  any element it scopes (*). */
+export function cssRules(css: string): CssRule[] {
+  const root: CssRule = { prelude: '', decls: [] }, rules = [root], stack = [root];
+  let buffer = '', parens = 0;
+  const under = (prelude: string, parent: string) => !prelude.startsWith('@') ? prelude : parent && !parent.startsWith('@') ? parent : /^@scope\b/i.test(unescapeCss(prelude)) ? '*' : prelude;
+  const flush = () => { const text = buffer.trim(), colon = text.indexOf(':'); buffer = ''; if (colon > 0 && !text.startsWith('@')) stack.at(-1)!.decls.push([propertyName(text.slice(0, colon)), text.slice(colon + 1).trim()]); };
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i]!;
+    if (c === '"' || c === "'") { const end = stringEnd(css, i); buffer += css.slice(i, end); i = end - 1; }
+    else if (c === '\\') { buffer += css.slice(i, i + 2); i++; }
+    else if (c === '/' && css[i + 1] === '*') { const end = css.indexOf('*/', i + 2); i = end < 0 ? css.length : end + 1; buffer += ' '; }
+    else if (c === '(' || (c === ')' && parens)) { parens += c === '(' ? 1 : -1; buffer += c; }
+    else if (parens) buffer += c;
+    else if (c === '{') { const rule: CssRule = { prelude: under(buffer.trim(), stack.at(-1)!.prelude), decls: [] }; buffer = ''; rules.push(rule); stack.push(rule); }
+    else if (c === '}') { flush(); if (stack.length > 1) stack.pop(); }
+    else if (c === ';') flush();
+    else buffer += c;
+  }
+  flush();
+  return rules;
+}
+/** A selector list's selectors, split at its top-level commas: each as written, and bare, without its strings, escapes'
+ *  characters and bracketed [...] and (...) groups however nested (an escape itself stays, for subjectOf). */
+export function selectorList(prelude: string) {
+  const out: { text: string; bare: string }[] = [];
+  let start = 0, depth = 0, bare = '';
+  for (let i = 0; i < prelude.length; i++) {
+    const c = prelude[i]!;
+    if (c === '\\') { if (!depth) bare += prelude.slice(i, i + 2); i++; }
+    else if (c === '"' || c === "'") i = stringEnd(prelude, i) - 1;
+    else if (c === '[' || c === '(') depth++;
+    else if (c === ']' || c === ')') depth = Math.max(0, depth - 1);
+    else if (depth) continue;
+    else if (c === ',') { out.push({ text: prelude.slice(start, i), bare }); start = i + 1; bare = ''; }
+    else bare += c;
+  }
+  out.push({ text: prelude.slice(start), bare });
+  return out;
+}
 /** The index keys an element's rules may be filed under: any element's, its type's, its id's and each class's. */
 const subjectKeys = (tag: string, id: string | undefined, classes: Set<string>) => ['*', tag, ...id ? [`#${id}`] : [], ...[...classes].map(c => `.${c}`)];
-/** What a selector's subject (its last compound, without arguments or attribute tests) needs of an element: a type,
- *  classes and ids. One with an escape or a namespace could name anything, so it needs nothing. */
+/** What a bare selector's subject (its last compound; selectorList) needs of an element: a type, classes and ids. One
+ *  with an escape or a namespace could name anything, so it needs nothing. */
 type Subject = { tag?: string; classes: string[]; ids: string[] };
-function subjectOf(selector: string): Subject {
-  const subject = selector.replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim().split(/[\s>+~]+/).at(-1)!.toLowerCase();
+function subjectOf(bare: string): Subject {
+  const subject = bare.trim().split(/[\s>+~]+/).at(-1)!.toLowerCase();
   if (/[\\|]/.test(subject)) return { classes: [], ids: [] };
   return { tag: /^[a-z][\w-]*/.exec(subject)?.[0], classes: [...subject.matchAll(/\.([-\w]+)/g)].map(m => m[1]!), ids: [...subject.matchAll(/#([-\w]+)/g)].map(m => m[1]!) };
 }
 /**
- * Selectors by the subject they could select, for a reader that asks of each element which rules may apply to it
+ * Bare selectors (selectorList) by the subject they could select, for a reader that asks of each element which rules may apply to it
  * without running a selector engine: filed under the subject's first class, id or type, so an element meets only the
  * ones it could match. At most MAX_RULES selectors (add answers false past them), and `step` is called per comparison,
  * for the caller's work budget.
@@ -562,9 +612,9 @@ export function selectorSubjects<T>() {
   const index = new Map<string, { subject: Subject; value: T }[]>();
   let size = 0;
   return {
-    add(selector: string, value: T) {
+    add(bare: string, value: T) {
       if (++size > MAX_RULES) return false;
-      const subject = subjectOf(selector), key = subject.classes.length ? `.${subject.classes[0]}` : subject.ids.length ? `#${subject.ids[0]}` : subject.tag ?? '*';
+      const subject = subjectOf(bare), key = subject.classes.length ? `.${subject.classes[0]}` : subject.ids.length ? `#${subject.ids[0]}` : subject.tag ?? '*';
       const list = index.get(key); if (list) list.push({ subject, value }); else index.set(key, [{ subject, value }]);
       return true;
     },
@@ -632,19 +682,32 @@ function enlarge(into: Sizes, decls: Declaration[]) {
   }
   return into;
 }
-/** Every style sheet rule that sets a size property, rules inside at-rules (media queries) included, by the subject it
- *  could select (selectorSubjects), with the sizes it sets. Null past the sheet or rule budget: any picture may be resized. */
+/** Every style sheet rule that sets a size property, rules inside at-rules (media queries) and nested ones included
+ *  (cssRules), by the subject it could select (selectorSubjects), with the sizes it sets. A sheet past the size or rule
+ *  budget is refused: it cannot be read for which pictures it resizes. */
 function sizingRules(sheets: string[]) {
   const css = stripComments(sheets.join('\n'));
-  if (css.length > MAX_SHEET_BYTES) return null;
+  if (css.length > MAX_SHEET_BYTES) throw tooLarge();
   const index = selectorSubjects<Sizes>();
-  for (const m of css.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
-    const prelude = m[1]!.trim(), decls = declarations(unescapeCss(m[2]!)).filter(d => SIZING.has(d.property));
-    if (!decls.length || prelude.startsWith('@')) continue;
+  for (const rule of cssRules(css)) {
+    const decls = rule.decls.filter(([property]) => SIZING.has(property)).map(([property, value]) => ({ property, value: unescapeCss(value).replace(/!\s*important\s*$/i, '').trim(), important: false }));
+    if (!decls.length || !rule.prelude || rule.prelude.startsWith('@')) continue;
     const sizes = enlarge({ width: 0, height: 0, zoom: 1 }, decls);
-    for (const selector of prelude.split(',')) if (!index.add(selector, sizes)) return null;
+    for (const { bare } of selectorList(rule.prelude)) if (!index.add(bare, sizes)) throw tooLarge();
   }
   return index;
+}
+/** A data: URL a style loads as an SVG picture, whose text no screen reads: refused in markup delivered as written, in
+ *  any style sheet or style attribute, comments and escapes read either way. */
+const SVG_DATA = /data\s*:\s*image\s*\/\s*svg/i;
+function refuseSvgData(parent: Parent) {
+  for (const node of parent.childNodes) {
+    if (!isElement(node)) { if ('childNodes' in node) refuseSvgData(node as unknown as Parent); continue; }
+    const css = [node.tagName === 'style' ? node.childNodes.map(child => isText(child) ? child.value : '').join('') : '', node.attrs.find(a => a.name === 'style')?.value ?? ''];
+    if (css.some(text => text && [text, stripComments(text)].some(v => SVG_DATA.test(unescapeCss(v)))))
+      throw new ApiError(422, 'ATTACHMENT_TYPE_UNSCREENABLE', `Hosted sending cannot screen an SVG image a style draws (a data:image/svg+xml URL): SVG images are never sent. Use a PNG or JPEG.`);
+    refuseSvgData(node);
+  }
 }
 /** The elements that draw a picture: images, inline SVG, image inputs and Office VML with a source. */
 const isPicture = (element: Element) => { const tag = element.tagName; return tag === 'img' || tag === 'image' || tag === 'svg' || (tag === 'input' && element.attrs.find(a => a.name === 'type')?.value.toLowerCase() === 'image') || (/:(?:imagedata|image|fill)$/.test(tag) && element.attrs.some(a => a.name === 'src')); };
@@ -705,6 +768,7 @@ function pass(html: string, previewText?: string, stats?: HtmlStats, kept = fals
     return found;
   };
   const head = part('head'), body = part('body');
+  if (kept) refuseSvgData(root);
   const sheets: string[] = [];
   const collect = (parent: Parent) => { for (const node of parent.childNodes) if (isElement(node) && node.namespaceURI === HTML) { if (node.tagName === 'style') sheets.push(node.childNodes.map(child => isText(child) ? child.value : '').join('')); else collect(node); } else if (!isElement(node) && 'childNodes' in node) collect(node as unknown as Parent); };
   collect(root);

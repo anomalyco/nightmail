@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { recordAiUsage } from './support-ai-cost.js';
 import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, errors, isoTime, json, log, nextCursor, notFound, readCursor, response, type App, type Config, type Ctx, type DbExecutor } from './core.js';
+import { verifiedUserEmail } from './account-policy.js';
 import { auditInsert, operatorContext, operatorRequired } from './audit.js';
 import { signedUrl } from './inbound-threads.js';
 import { replyText } from './mailbox-store.js';
@@ -664,8 +665,8 @@ export function registerSupportInbox(app: App) {
           UNION ALL SELECT 'sev_' || e.id, e.id, e.kind, e.user_id, u.name, e.details::json, e.created_at FROM support_events e LEFT JOIN nightmail_users u ON u.id = e.user_id WHERE e.conversation_id = conv.id
           UNION ALL SELECT 'closed', 9223372036854775807, 'closed', NULL, NULL, '{}'::json, conv.closed_at WHERE conv.closed_at IS NOT NULL) e) AS events,
         conv.ticket_brief AS brief,
-        CASE WHEN conv.channel = 'email' THEN conv.pending_address ELSE (SELECT email FROM nightmail_users WHERE id = conv.user_id AND email_verified) END AS reply_address,
-        CASE WHEN conv.channel = 'chat' THEN EXISTS (SELECT FROM nightmail_users WHERE id = conv.user_id AND email_verified)
+        CASE WHEN conv.channel = 'email' THEN conv.pending_address ELSE ${verifiedUserEmail(sql`conv.user_id`)} END AS reply_address,
+        CASE WHEN conv.channel = 'chat' THEN ${verifiedUserEmail(sql`conv.user_id`)} IS NOT NULL
           ELSE conv.verification <> 'none' OR coalesce(conv.evidence->>'dmarc' = 'PASS', false) END AS reply_verified,
         (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'emailVerified', u.email_verified, 'createdAt', u.created_at) FROM nightmail_users u WHERE u.id = conv.user_id) AS user,
         (SELECT coalesce(json_agg(x ORDER BY x.name, x.id), '[]') FROM (SELECT w.id, w.name, m.role, m.created_at AS "joinedAt", w.created_at AS "createdAt",
@@ -782,7 +783,7 @@ export function registerSupportInbox(app: App) {
     const { rows: [scope] } = await tx.execute<{ emails: string[]; ids: string[]; names: string[]; written: string; own: string | null }>(sql`WITH c AS (SELECT * FROM support_conversations WHERE id = ${id}),
         theirs AS (SELECT w.id, w.name FROM workspaces w WHERE w.id = (SELECT workspace_id FROM c)
           OR w.id IN (SELECT m.workspace_id FROM workspace_members m WHERE m.user_id = (SELECT user_id FROM c) ORDER BY m.workspace_id LIMIT 50))
-      SELECT array_remove(ARRAY[(SELECT email FROM nightmail_users WHERE id = c.user_id), c.pending_address], NULL) AS emails,
+      SELECT array_remove(ARRAY[${verifiedUserEmail(sql`c.user_id`)}, c.pending_address], NULL) AS emails,
         array_remove(ARRAY[c.id, c.ticket_id], NULL) || coalesce((SELECT array_agg(id) FROM theirs), '{}') AS ids, coalesce((SELECT array_agg(name) FROM theirs), '{}') AS names,
         concat_ws(E'\n', c.subject, (SELECT string_agg(m.text, E'\n' ORDER BY m.seq) FROM support_messages m WHERE m.conversation_id = c.id AND m.author = 'customer')) AS written,
         (SELECT name FROM nightmail_users WHERE id = ${operator.userId}) AS own

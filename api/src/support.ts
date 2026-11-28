@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { ApiError, denied, errors, hasSessionCookie, id, json, notFound, response, timed, webhookUrlHint, withoutVerdict, type App, type AppEnv, type Ctx, type DbExecutor, type SupportScope } from './core.js';
+import { verifiedUserEmail } from './account-policy.js';
 import { AuditEntry, AuditFilters, auditContext, auditInsert, customerTrail, operatorRequired, requireOperator } from './audit.js';
 import { supportRead, withRedactedReply } from './deliverability.js';
 import { GOOD_STANDING, limitRequest, type Step } from './standing-model.js';
@@ -357,7 +358,7 @@ export function registerSupport(app: App) {
           RETURNING id, expires_at
         ), logged AS (${auditInsert(auditContext(c), { action: 'support.contact', workspaceId: a.workspaceId, target: { type: 'support_handoff', id: handoffId },
           after: { kind: body.kind, page: body.page, requestIds: body.requestIds, contentShared: body.shareContent, ...body.ticket ? { ticket: true } : {} } }, { where: sql`EXISTS (SELECT FROM h)` })})
-        SELECT h.id, h.expires_at::text, w.name, (SELECT email FROM nightmail_users WHERE id = ${userId} AND email_verified) AS email FROM h, workspaces w WHERE w.id = ${a.workspaceId}`);
+        SELECT h.id, h.expires_at::text, w.name, ${verifiedUserEmail(sql`${userId}`)} AS email FROM h, workspaces w WHERE w.id = ${a.workspaceId}`);
       const ticket = row && body.ticket ? await fileChatTicket(db, { userId, workspaceId: a.workspaceId, handoffId, text: body.ticket.message }) : null;
       return { row, ticket };
     };

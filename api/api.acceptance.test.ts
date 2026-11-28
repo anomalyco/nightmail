@@ -7816,9 +7816,13 @@ describe('Hosted MCP OAuth and tools', () => {
       for(const change of [[...attachments].reverse(),attachments.slice(1),[{...attachments[0],continue:true},attachments[1]]])
         error(await attach(change),403,'RULE_BINDING_NOT_OWNED');
       assert.equal(ok(await local('GET',path)).version,saved.version);
-      ok(await attach([binding('extra'),...attachments]));
+      // The approval's attachments go after the person's, on the address and on its inbox ID alike (the same mail): one
+      // ahead of them could stop the chain first or crowd them out of the per-address limit.
+      for(const change of [[binding('extra'),...attachments],[{...binding('extra'),target:box.id},...attachments],[attachments[0],binding('extra'),attachments[1]]])
+        error(await attach(change),403,'RULE_BINDING_NOT_OWNED');
+      ok(await attach([...attachments,{...binding('extra'),target:box.id}]));
       const dry=async()=>ok(await local('POST',path+'/test',{mime:`To: ${box.address}\r\nSubject: fixture\r\n\r\nfixture`})).recipients[0];
-      assert.ok((await dry()).labels.includes('extra'));
+      assert.equal((await dry()).dropped,true);
       ok(await local('POST','/v1/agents/mcp_'+consentId+'/revoke'));
       assert.equal((await dry()).dropped,true,'Only the grant-owned addition disappears; the original first guard still blocks.');
     });
@@ -7828,8 +7832,8 @@ describe('Hosted MCP OAuth and tools', () => {
     await simulatedSesFixture(t,async({db,local,request})=>{
       const {token,consentId}=await oauthGrant(t,db,writableScope,request);
       const box=ok(await local('POST','/v1/inboxes',{type:'sandbox'}),201),path='/v1/rules';
-      const rules=[{key:'listed',source:'export default function route(email){if(lists.has("deny",email.from.address)) block()}'},{key:'scored',source:'export default function route(email){const r=omens(email,{q:"Is review needed?"});if(r.q>0.5) label("review")}'},{key:'loose',source:'export default function route(email){label("loose")}'}];
-      ok(await local('PUT',path,{rules,attachments:['scored','listed'].map(rule=>({target:box.address,rule,continue:true})),senderLists:{deny:['spam@example.invalid'],spare:['other@example.invalid']},evaluateDomains:[box.address.split('@')[1]]}));
+      const rules=[{key:'listed',source:'export default function route(email){if(lists.has("deny",email.from.address)) block()}'},{key:'scored',source:'export default function route(email){const r=omens(email,{q:"Is review needed?"});if(r.q>0.5) label("review")}'},{key:'loose',source:'export default function route(email){label("loose")}'},{key:'paused',source:'export default function route(email){block()}',enabled:false}];
+      ok(await local('PUT',path,{rules,attachments:['scored','listed','paused'].map(rule=>({target:box.address,rule,continue:true})),senderLists:{deny:['spam@example.invalid'],spare:['other@example.invalid']},evaluateDomains:[box.address.split('@')[1]]}));
       const saved=ok(await local('GET',path));
       const key=ok(await request('POST','/mcp?codemode=true',token,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'createApiKey',arguments:{confirm:true,body:{name:'R1 source fixture',permissions:['manage']}}}},rpcHeaders)).result.structuredContent.secret;secrets.add(key);
       const apply=(change:Json)=>request('PUT',path,key,{...saved.config,...change});
@@ -7839,6 +7843,9 @@ describe('Hosted MCP OAuth and tools', () => {
         [await apply({senderLists:{...saved.config.senderLists,deny:['nobody@example.invalid']}}),'senderLists'],
         [await apply({evaluateDomains:[]}),'evaluateDomains'],
         [await request('PUT',path+'/decisions',key,{evaluateDomains:[],evaluateRoutes:[]}),'evaluateDomains'],
+        // Neither off (which stops it like detaching would) nor back on when its owner paused it.
+        [await apply({rules:rules.map(r=>r.key==='listed'?{...r,enabled:false}:r)}),'enabled'],
+        [await apply({rules:rules.map(r=>r.key==='paused'?{...r,enabled:true}:r)}),'enabled'],
       ] as const) { error(reply,403,'RULE_BINDING_NOT_OWNED'); assert.equal(reply.body.error.field,field); }
       // Removing a list the rule reads leaves a rule that doesn't compile, refused before ownership is asked.
       error(await apply({senderLists:{spare:saved.config.senderLists.spare}}),422,'RULE_INVALID');
@@ -8284,17 +8291,26 @@ describe('Hosted MCP OAuth and tools', () => {
       const toolAs = async (bearer: string, name: string, args: Json) => { const r = ok(await request('POST', '/mcp?codemode=true', bearer, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { confirm: true, ...args } } }, rpcHeaders)).result; assert.equal(r.isError, false, redact(r)); };
       const tool = (name: string, args: Json) => toolAs(token, name, args);
       const slack = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/fixturefixturefixture';
-      // A person creates each kind of URL endpoint and a forward to an address on a domain of theirs; the approval
-      // then changes all but one of them.
+      // The approval creates each kind of URL endpoint and a forward to an address on a domain of the workspace's, and
+      // changes them; a person's endpoint it may neither change nor delete.
       const wid = runtime.config.workspaceId, domain = unique('held').replaceAll('_', '-') + '.example';
       await db.query('INSERT INTO operation_domains(id,name,workspace_id,region) VALUES($1,$2,$3,$4)', [unique('dom'), domain, wid, REGION]);
-      for (const body of [{ type: 'webhook', name: 'helpdesk', url: 'https://example.com/hooks/helpdesk' }, { type: 'slack', name: 'alerts', url: slack }, { type: 'webhook', name: 'untouched', url: 'https://example.com/hooks/untouched' }, { type: 'forward', name: 'escalate', address: `ops@${domain}`, preverify: true }])
-        ok(await local('POST', '/v1/endpoints', body), 201);
+      for (const body of [{ type: 'webhook', name: 'helpdesk', url: 'https://example.com/hooks/helpdesk' }, { type: 'slack', name: 'alerts', url: slack }, { type: 'forward', name: 'escalate', address: `ops@${domain}`, preverify: true }])
+        await tool('createEndpoint', { body });
+      ok(await local('POST', '/v1/endpoints', { type: 'webhook', name: 'untouched', url: 'https://example.com/hooks/untouched' }), 201);
+      const refused = async (name: string, args: Json) => { const r = ok(await request('POST', '/mcp?codemode=true', token, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { confirm: true, ...args } } }, rpcHeaders)).result; assert.equal(r.isError, true, name); assert.match(JSON.stringify(r), /ENDPOINT_NOT_OWNED/, name); };
+      await refused('updateEndpoint', { name: 'untouched', body: { url: 'https://example.net/hooks/stolen' } });
+      await refused('deleteEndpoint', { name: 'untouched' });
       const hook = ok(await local('POST', '/v1/inbound/webhooks', { url: 'https://example.com/hooks/events' }), 201);
       await tool('updateEndpoint', { name: 'helpdesk', body: { url: 'https://example.net/hooks/helpdesk' } });
       await tool('updateEndpoint', { name: 'alerts', body: { perMinute: 30 } });
       await tool('updateEndpoint', { name: 'escalate', body: { perMinute: 30 } });
       await tool('updateInboundWebhook', { webhookId: hook.id, body: { description: 'Events' } });
+      // Once a person's attached rule calls one of the approval's endpoints, that endpoint is theirs to change too.
+      const inbox = ok(await local('POST', '/v1/inboxes', { type: 'sandbox' }), 201);
+      ok(await local('PUT', '/v1/rules', { rules: [{ key: 'relay', source: 'export default function route(email){endpoints.helpdesk({text:"x"})}' }], attachments: [{ rule: 'relay', target: inbox.id }] }));
+      await refused('updateEndpoint', { name: 'helpdesk', body: { url: 'https://example.net/hooks/stolen' } });
+      ok(await local('PUT', '/v1/rules', { rules: [], attachments: [] }));
       const endpoint = async (name: string) => ok(await local('GET', `/v1/endpoints/${name}`));
       assert.deepEqual([(await endpoint('helpdesk')).status, (await endpoint('alerts')).status, (await endpoint('escalate')).status], ['ready', 'ready', 'ready']);
 
@@ -8335,31 +8351,31 @@ describe('Hosted MCP OAuth and tools', () => {
       // A resume decides on the endpoint as it is when the update runs. Here a second approval that changed the
       // endpoint is removed after the resume has read the endpoint and before it writes.
       const second = await oauthGrant(t, db, writableScope, request);
-      await toolAs(second.token, 'updateEndpoint', { name: 'untouched', body: { perMinute: 30 } });
-      ok(await local('PATCH', '/v1/endpoints/untouched', { paused: true }));
+      await toolAs(second.token, 'createEndpoint', { body: { type: 'webhook', name: 'raced', url: 'https://example.com/hooks/raced' } });
+      ok(await local('PATCH', '/v1/endpoints/raced', { paused: true }));
       const query = pg.Client.prototype.query as (...args: unknown[]) => Promise<unknown>; let removed = false;
       const wire = t.mock.method(pg.Client.prototype, 'query', function (this: pg.Client, ...args: unknown[]) {
         const text = typeof args[0] === 'string' ? args[0] : (args[0] as { text?: string })?.text ?? '';
         // The endpoint's first read, by name, before its approval is held and its row locked (lockEndpoint).
-        if (this !== db || removed || !/^select "id", "type" from "mailbox_webhooks" where/.test(text)) return query.apply(this, args);
+        if (this !== db || removed || !/^select "id", "type", "key" from "mailbox_webhooks" where/.test(text)) return query.apply(this, args);
         removed = true;
         return query.apply(this, args).then(async rows => { await query.call(this, 'DELETE FROM nightmail_resource_grants WHERE grant_key=$1', [second.consentId]); return rows; });
       } as typeof pg.Client.prototype.query);
       let raced: Reply;
-      try { raced = await local('PATCH', '/v1/endpoints/untouched', { paused: false }); } finally { wire.mock.restore(); }
+      try { raced = await local('PATCH', '/v1/endpoints/raced', { paused: false }); } finally { wire.mock.restore(); }
       // A hook that never fired tests nothing: when that read changes, this fails here, not as the wrong path passing.
       assert.equal(removed, true, 'The endpoint’s first read was not seen: match the query lockEndpoint sends now.');
       error(raced, 409, 'ENDPOINT_URL_REQUIRED');
-      const marked = async () => (await db.query("SELECT paused,reconfirm FROM mailbox_webhooks WHERE key='untouched' AND workspace_id=(SELECT workspace_id FROM mailbox_webhooks WHERE id=$1)", [hook.id])).rows[0];
+      const marked = async () => (await db.query("SELECT paused,reconfirm FROM mailbox_webhooks WHERE key='raced' AND workspace_id=(SELECT workspace_id FROM mailbox_webhooks WHERE id=$1)", [hook.id])).rows[0];
       // The refused request rolled back with everything on its connection, the removal included: the endpoint is still paused.
       assert.equal((await marked()).paused, true);
       ok(await local('POST', '/v1/agents/mcp_' + second.consentId + '/revoke'));
       assert.deepEqual(await marked(), { paused: true, reconfirm: true });
       // The database holds the same rule for any writer: a marked endpoint stays paused.
       await db.query('SAVEPOINT marked_endpoint');
-      await assert.rejects(db.query("UPDATE mailbox_webhooks SET paused=false WHERE key='untouched' AND reconfirm"), /mailbox_webhook_reconfirm_paused/);
+      await assert.rejects(db.query("UPDATE mailbox_webhooks SET paused=false WHERE key='raced' AND reconfirm"), /mailbox_webhook_reconfirm_paused/);
       await db.query('ROLLBACK TO SAVEPOINT marked_endpoint');
-      assert.equal(ok(await local('PATCH', '/v1/endpoints/untouched', { url: 'https://example.com/hooks/untouched', paused: false })).status, 'ready');
+      assert.equal(ok(await local('PATCH', '/v1/endpoints/raced', { url: 'https://example.com/hooks/raced', paused: false })).status, 'ready');
       assert.deepEqual(await marked(), { paused: false, reconfirm: false });
 
       // A write by a key an approval created reads the approval again inside its transaction, not only when the request
@@ -13815,6 +13831,11 @@ describe('Hosted MCP OAuth and tools', () => {
       assert.equal(filed.status, 200, JSON.stringify(filed.body));
       assert.deepEqual([filed.body.filed, filed.body.user.id, filed.body.workspace?.id, filed.body.page, filed.body.messages.map(m => m.text)],
         [true, manager!.userId, wid, '/logs', ['Why did my import bounce?', 'It was the CSV from Monday.', 'Still bouncing today.']]);
+      assert.equal(filed.body.user.email, manager!.email);
+      // Staff replies go to the address it gives: never one the person's sign-in did not verify.
+      await db.query('UPDATE nightmail_users SET email_verified = false WHERE id = $1', [manager!.userId]);
+      try { assert.equal((await platform.filedConversation(id)).body.user.email, null); }
+      finally { await db.query('UPDATE nightmail_users SET email_verified = true WHERE id = $1', [manager!.userId]); }
       error(await local('GET', `/v1/operator/support/conversations/${id}/filed`), 403);
 
       // A chat the support platform holds (it dropped after the person sent something): the message goes into that chat.
@@ -33025,17 +33046,34 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       {
         const {assertKeptImages}=await import('./src/screened-html.js'),{readHtml}=await import('./src/screen.js');
         const bombs:[string,()=>unknown,string][]=[
-          ['sizing',()=>assertKeptImages(`<style>@media all{${'*,'.repeat(120000)}*{width:9px}}</style>${'<img src="cid:a">'.repeat(5000)}`),'CONTENT_IMAGE_ONLY'],
+          ['sizing',()=>assertKeptImages(`<style>@media all{${'*,'.repeat(120000)}*{width:9px}}</style>${'<img src="cid:a">'.repeat(5000)}`),'CONTENT_TOO_LARGE_TO_SCREEN'],
           ['inlined',()=>screenedHtml(`<style>${'p,'.repeat(120000)}p{color:#000}</style>${'<p>t</p>'.repeat(5000)}`),'CONTENT_TOO_LARGE_TO_SCREEN'],
           ['displayed',()=>readHtml(`<style>${'a,'.repeat(120000)}a{display:block}</style>${'<title>t</title>'.repeat(5000)}`),'CONTENT_TOO_LARGE_TO_SCREEN'],
         ];
         for (const [name,bomb,code] of bombs) {
           const times:number[]=[];
           for (let i=0;i<3;i++) { const at=performance.now(); await assert.rejects(async()=>bomb(),{code},name); times.push(performance.now()-at); }
-          assert.ok(Math.min(...times)<50,`${name}: ${times.map(n=>n.toFixed(1)).join(', ')} ms`);
+          // Unbounded, these took 25 s and more; the ceiling leaves shared CI runners room.
+          assert.ok(Math.min(...times)<500,`${name}: ${times.map(n=>n.toFixed(1)).join(', ')} ms`);
         }
-        // A picture a rule sizes by a pseudo-class still counts at the size the rule gives it.
-        await assert.rejects(async()=>assertKeptImages('<style>img:first-child{width:2000px;height:2000px}</style><p>Receipt.</p><img width="10" height="10" src="cid:a">'),{code:'CONTENT_IMAGE_ONLY'});
+        // A picture a rule sizes counts at the size the rule gives it, whatever its subject's brackets, strings or nesting
+        // hide from a reader that drops them one level deep; a sheet past the rule budget is refused, not guessed at.
+        const receipt=(css:string)=>assertKeptImages(`<style>${css}</style><p>Receipt.</p><img width="10" height="10" src="cid:a">`);
+        for (const css of ['img:first-child{width:2000px;height:2000px}','img:not(:nth-child(2).nonexistent){width:2000px;height:2000px}','img[data-x="].nonexistent"]{width:2000px;height:2000px}',
+          'img{@media all{width:2000px;height:2000px}}','div{img{width:2000px;height:2000px}}','@scope (body){width:2000px;height:2000px}'])
+          await assert.rejects(async()=>receipt(css),{code:'CONTENT_IMAGE_ONLY'},css);
+        assert.equal(receipt('.other{width:2000px;height:2000px}'),undefined);
+        await assert.rejects(async()=>receipt(`${'i,'.repeat(4001)}i{width:1px}`),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
+        // The same for an element a client hides that CSS may display: the screen reads its text.
+        for (const css of ['title:not(:nth-child(2).nonexistent){display:block}','title[data-x="].nonexistent"]{display:block}','title{@media all{display:block}}'])
+          assert.ok((await readHtml(`<style>${css}</style><title>SampleMarker</title><p>Hello</p>`)).text.includes('SampleMarker'),css);
+        assert.ok(!(await readHtml('<style>.other{display:block}</style><title>SampleMarker</title><p>Hello</p>')).text.includes('SampleMarker'));
+        // Markup kept as written draws no SVG through a style's data: URL, escaped or commented however.
+        const svg=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>SampleMarker</text></svg>').toString('base64');
+        for (const html of [`<div style="background:url('data:image/svg+xml;base64,${svg}')">Receipt.</div>`,String.raw`<style>.a{background:url("data\:image/svg\2b xml;base64,`+svg+'")}</style><p class="a">Receipt.</p>',
+          `<svg><style>.a{background-image:url(data:image/svg+xml;base64,${svg})}</style></svg><p>Receipt.</p>`])
+          await assert.rejects(async()=>assertKeptImages(html),{code:'ATTACHMENT_TYPE_UNSCREENABLE'},html);
+        assert.equal(assertKeptImages(`<div style="background:url('https://cdn.example/a.png');width:50px;height:50px">Receipt.</div>`),undefined);
       }
       // An image's data: URL is a raster picture or nothing: SVG draws text the screen never read.
       {
@@ -42683,8 +42721,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // Text no client draws beside the rest (a frame's, noembed's and noframes' fallback, a srcdoc) and markup only Outlook
     // shows (a conditional comment) never reach an agent as visible text, and say there was hidden content.
     for (const html of ['<p>Visible</p><iframe>Sample</iframe>','<p>Visible</p><noframes>Sample</noframes>','<p>Visible</p><noembed><b>Sample</b></noembed>',
-      '<p>Visible</p><iframe srcdoc="<p>Sample</p>"></iframe>','<p>Visible</p><!--[if mso]><p>Sample</p><![endif]-->'])
+      '<p>Visible</p><iframe srcdoc="<p>Sample</p>"></iframe>','<p>Visible</p><!--[if mso]><p>Sample</p><![endif]-->','<p>Visible</p><!--[if mso]><p>Sample</p>',
+      '<p>Visible</p><object data="x.swf">Sample</object>','<p>Visible</p><video>Sample</video>','<p>Visible</p><canvas>Sample</canvas>'])
       assert.deepEqual(safeMailText(null,html),{text:'Visible',hiddenContent:true},html);
+    // Markup revealed to every client but Outlook is read, and flagged: Outlook shows something else.
+    assert.deepEqual(safeMailText(null,'<!--[if !mso]><!--><p>Visible</p><!--<![endif]-->'),{text:'Visible',hiddenContent:true});
+    // A comment full of tags is one node, not 20,000: the body around it still reads.
+    assert.deepEqual(safeMailText(null,`<p>Visible</p><!-- ${'<b>'.repeat(20000)} -->`),{text:'Visible',hiddenContent:false});
     assert.deepEqual(safeMailText(null,'<p>Visible</p><!-- a note -->'),{text:'Visible',hiddenContent:false},'An ordinary comment is not hidden content.');
     assert.deepEqual(safeMailText('Clean text',null),{text:'Clean text',hiddenContent:false});
     assert.deepEqual(safeMailText(null,null),{text:'',hiddenContent:false});

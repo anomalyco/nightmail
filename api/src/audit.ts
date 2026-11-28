@@ -192,7 +192,7 @@ export const operatorContext = (c: Ctx, operator: OperatorIdentity): AuditContex
 // ---------- reading the trail ----------
 
 /** The person behind a user ID, for display (identity is the issuer subject; the address is display only). */
-export const userEmail = (userId: SQL) => sql`(SELECT email FROM nightmail_users WHERE id = ${userId})`;
+const userEmail = (userId: SQL) => sql`(SELECT email FROM nightmail_users WHERE id = ${userId})`;
 
 export const AuditEntry = z.object({
   id: z.string().describe('Stable ID of the entry; audit entries are prefixed aud_, ledger lines bill_, enforcement events enf_.'),
