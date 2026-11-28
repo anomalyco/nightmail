@@ -10,8 +10,8 @@ function initDeps() {
     import('pg'), import('drizzle-orm/node-postgres'), import('drizzle-orm/sql'),
     import('./config.js'), import('./adapters/storage.js'), import('./dispatcher.js'),
     import('./core.js'), import('./adapters/feedback-queue.js'), import('./health-counters.js'), import('./screen-shadow.js'),
-  ]).then(([{ Pool }, { drizzle }, { sql }, { loadConfig }, { r2Storage }, { initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize }, { ApiError, log, logError, platformMessage, setLogContext }, { feedbackSink, workWake }, { flushCounters }, { enqueueShadow }]) => ({
-    Pool, drizzle, sql, loadConfig, r2Storage, initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize, ApiError, log, logError, platformMessage, setLogContext, feedbackSink, workWake, flushCounters, enqueueShadow,
+  ]).then(([{ Pool }, { drizzle }, { sql }, { loadConfig }, { r2Storage }, { initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize }, { ApiError, log, logError, platformMessage, setLogContext }, { feedbackSink, workWake }, { countersDue, flushCounters }, { enqueueShadow }]) => ({
+    Pool, drizzle, sql, loadConfig, r2Storage, initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize, ApiError, log, logError, platformMessage, setLogContext, feedbackSink, workWake, countersDue, flushCounters, enqueueShadow,
   }));
 }
 let depsPromise: ReturnType<typeof initDeps> | undefined;
@@ -149,7 +149,7 @@ export class DispatcherShard extends DurableObject<Env> {
       // Throttle and guard gate persistence: a transient DO storage error must never crash a healthy run into a 15 s retry.
       const GATE_PERSIST_MS = 2000;
       let lastPersistAt = 0, lastPersistKey = '';
-      const gateKey = (s: GateState) => `${s.quota?.checkedAt ?? 0}:${s.brakeUntil ?? 0}:${s.marketingBrakeUntil ?? 0}:${s.outageUntil ?? 0}:${s.accountPauseAt ?? 0}:${s.dailyBlockedUntil ?? 0}`;
+      const gateKey = (s: GateState) => `${s.quota?.checkedAt ?? 0}:${s.brakeUntil ?? 0}:${s.marketingBrakeUntil ?? 0}:${s.outageUntil ?? 0}:${s.accountPauseAt ?? 0}:${s.dailyBlockedUntil ?? 0}:${s.storageUntil ?? 0}`;
       const persistGate = async (state: GateState, force = false) => {
         const now = Date.now(), key = gateKey(state);
         if (!force && key === lastPersistKey && now - lastPersistAt < GATE_PERSIST_MS) return;
@@ -157,26 +157,40 @@ export class DispatcherShard extends DurableObject<Env> {
         try { await this.ctx.storage.put('gate', state, { allowUnconfirmed: true }); }
         catch (error) { deps?.log('warn', { code: 'DISPATCHER_GATE_PERSIST_FAILED', shard: dispatcherName(identity), cause: deps.platformMessage(error) }); }
       };
-      const report = await runDispatcher(runtime, {
-        ...identity, gate: this.gate, priorityWake: this.priorityWake,
-        until: started + RUN_MS, lanes: 2, batchSize: deps.shardLeaseSize(this.gate.quota?.maxSendRate,identity.shard.count), sendConcurrency: 6, wakeMs,
-        onGate: state => persistGate(state),
+      // If AWS changed MaxSendRate (e.g. 200/s -> 1,000/s) on an auto-scaled shard, hand off to the new shard count and
+      // retire this old count's alarm, so the two generations never send together (up to twice the account's rate). A
+      // fresh sample that already asks for another count skips the run; one that changes during it stops leasing.
+      const gate = this.gate;
+      const desired = () => (identity.autoScale || Boolean(this.env?.DISPATCHER)) && gate.quota?.maxSendRate && Date.now() < (gate.refreshAt ?? 0)
+        ? shardsForRate(gate.quota.maxSendRate, identity.shard.count) : identity.shard.count;
+      const resized = desired() !== identity.shard.count;
+      const report = resized ? undefined : await runDispatcher(runtime, {
+        ...identity, gate, priorityWake: this.priorityWake,
+        until: started + RUN_MS, lanes: 2, batchSize: deps.shardLeaseSize(gate.quota?.maxSendRate,identity.shard.count), sendConcurrency: 6, wakeMs,
+        onGate: state => persistGate(state), stop: () => desired() !== identity.shard.count,
       });
-      await persistGate(this.gate, true);
+      await persistGate(gate, true);
+      // Error lines from a run that succeeded (SES paused or refusing credentials, acceptance unknown) reach the health
+      // tick too, not only a failed run's (src/health-counters.ts). Counts flush at most every 20 s, on the run's pool, and
+      // after every idle run: the object may be evicted before the next one. With nothing counted the flush is no query.
+      if (report?.idle !== false || deps.countersDue()) this.ctx.waitUntil(deps.flushCounters(runtime.db));
       if (!this.placementLogged) { this.placementLogged = true; this.ctx.waitUntil(this.logPlacement(identity, runtime)); }
-      // If AWS changed MaxSendRate (e.g. 200/s -> 1,000/s) on an auto-scaled shard, hand off to the new shard count
-      // immediately and retire this old count's alarm so stale shards never compete with the resized pool.
-      const desired = (identity.autoScale || Boolean(this.env?.DISPATCHER)) && this.gate.quota?.maxSendRate ? shardsForRate(this.gate.quota.maxSendRate, identity.shard.count) : identity.shard.count;
-      if (desired !== identity.shard.count) {
-        if (!report.idle && identity.shard.index === 0 && this.env?.DISPATCHER) {
-          this.ctx.waitUntil(Promise.allSettled(Array.from({ length: desired }, (_, i) => {
-            const target: Identity = { accountId: identity.accountId, region: identity.region, shard: { index: i, count: desired }, autoScale: true };
+      const count = desired();
+      if (count !== identity.shard.count) {
+        // This shard is retired: a retry a wake displaced must not bring it back.
+        await this.ctx.storage.delete('displacedAlarm');
+        // Mail is waiting: shard 0 wakes the whole new generation, any other shard only the one that takes its share, so
+        // a wake that reached just this shard is not lost and a resize is not a fan-out from every old shard.
+        if (!report?.idle && this.env?.DISPATCHER) {
+          const targets = identity.shard.index === 0 ? Array.from({ length: count }, (_, i) => i) : [identity.shard.index % count];
+          this.ctx.waitUntil(Promise.allSettled(targets.map(i => {
+            const target: Identity = { accountId: identity.accountId, region: identity.region, shard: { index: i, count }, autoScale: true };
             const stub = this.env.DISPATCHER.get(this.env.DISPATCHER.idFromName(dispatcherName(target)), { locationHint: 'enam' });
-            return stub.fetch(`https://dispatcher/wake?region=${encodeURIComponent(identity.region)}&shard=${i}&count=${desired}${identity.accountId ? `&account=${encodeURIComponent(identity.accountId)}` : ''}&auto=1`);
+            return stub.fetch(`https://dispatcher/wake?region=${encodeURIComponent(identity.region)}&shard=${i}&count=${count}${identity.accountId ? `&account=${encodeURIComponent(identity.accountId)}` : ''}&auto=1`);
           })));
         }
         next = undefined;
-      } else {
+      } else if (report) {
         // Work remained when the run budget ended: continue immediately. Otherwise sleep until the next wake (an API nudge or
         // the scheduler's minute ping) or the run's own retry. A wake only arms this alarm, so every run, and all queued mail,
         // now depends on the alarm firing; armNow re-arms one left overdue by a platform retry wait.

@@ -1,8 +1,8 @@
 import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
-import { ApiError, databaseConflict, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, databaseCodeOf, databaseConflict, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
-import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
+import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, storageUnavailable, attachmentReads, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { tieAllows } from './approval-ties.js';
 import { principal } from './mail-gateway.js';
@@ -65,7 +65,7 @@ const requeued = (o: Outcome) => o.type === 'provider_throttled' || o.type === '
 // customerSent: what outside workspaces on a shared account used of its daily limit (migration 401), read with the sample.
 export interface QuotaSnapshot { maxSendRate: number; max24HourSend: number; sentLast24Hours: number; customerSent?: number; checkedAt: number }
 // Serializable pacing state so a Durable Object survives eviction without bursting.
-export interface GateState { nextAllowedAt: number; txAllowedAt?: number; marketingAllowedAt?: number; quota: QuotaSnapshot | null; refreshAt?: number; sentSinceRefresh: number; brakeUntil?: number; marketingBrakeUntil?: number; recentTxUntil?: number; accountPauseAt?:number; outageUntil?: number; outageStreak?: number; dailyBlockedUntil?: number; ownerCursor?: string }
+export interface GateState { nextAllowedAt: number; txAllowedAt?: number; marketingAllowedAt?: number; quota: QuotaSnapshot | null; refreshAt?: number; sentSinceRefresh: number; brakeUntil?: number; marketingBrakeUntil?: number; recentTxUntil?: number; accountPauseAt?:number; outageUntil?: number; outageStreak?: number; storageUntil?: number; storageStreak?: number; dailyBlockedUntil?: number; ownerCursor?: string }
 export const initialGate = (): GateState => ({ nextAllowedAt: 0, quota: null, sentSinceRefresh: 0 });
 /** Target per-shard SES send rate (emails/sec). A Durable Object holds 6 simultaneous outbound connections (~35/s ceiling
  *  at 170 ms SES RTT), so 25/s per shard gives 8 shards at 200/s and scales smoothly to 40 shards at 1,000/s. */
@@ -89,6 +89,24 @@ const BRAKE_MS = 10000;
 // SES gave no usable answer (transport error, timeout, 5xx, or no MessageId): an ambiguous call is never replayed, so stop starting new
 // calls instead of turning every queued email into acceptance_unknown. Doubles while SES stays silent.
 const OUTAGE_MS = 15000, OUTAGE_MAX_MS = 300000;
+// Object storage threw on a read (R2 or S3 down, not a missing object): the shard's attachment mail waits together, from
+// 15 s doubling to 5 min, jittered, instead of every row retrying alone every 15 s.
+const STORAGE_MS = 15000, STORAGE_MAX_MS = 300000;
+// SES per-second throttling: from 2 s doubling to 5 min, jittered. It never rejects accepted mail: the account is busy, not refusing it.
+const THROTTLE_MS = 2000, THROTTLE_MAX_MS = 300000;
+/** ±25% of ms, never past capMs, so work that failed together does not come back together. At the cap the waits spread
+ *  over its last quarter instead of piling on it (as retryDelay does, src/ritual-retry.ts). */
+const jittered = (ms: number, capMs: number) => {
+  const lo = Math.min(0.75 * ms, 0.75 * capMs), hi = Math.min(1.25 * ms, capMs);
+  return Math.round(lo + (hi - lo) * Math.random());
+};
+// The quota refresher's election fence: long enough for one GetAccount, short enough that a failed one only delays the
+// next try. A sample that publishes extends it to the refresh period.
+const QUOTA_ELECTION_MS = 10000;
+// A refresh that fails keeps pacing on the previous sample while it is this young, and tries again this soon.
+const QUOTA_STALE_MS = 5 * 60000, QUOTA_RETRY_MS = 5000;
+// A claim waits at most this long for a row another transaction holds (lock_timeout), then gives its group back to the queue.
+const CLAIM_LOCK_MS = 1000, CLAIM_BUSY_MS = 5000;
 // Far below interrupted-attempt recovery (3 min) and the queue lease (2 min). Ordinary groups
 // can share a claim, but an unsent item never waits behind a long envelope or priority flood.
 const MAX_PRE_SEND_MS = 5000;
@@ -156,22 +174,23 @@ function observeQuota(gate: GateState, sample: QuotaSnapshot, refreshMs: number,
   if (gate.dailyBlockedUntil) gate.refreshAt = gate.dailyBlockedUntil = Math.max(gate.refreshAt, gate.dailyBlockedUntil);
   return true;
 }
-// Elect the refresher BEFORE GetAccount, across all DOs/lanes for this account. A failed or
-// interrupted fetch keeps its fence until the next cache period; no DB lock is held over AWS I/O.
+// Elect the refresher BEFORE GetAccount, across all DOs/lanes for this account. The election holds a short fence
+// (QUOTA_ELECTION_MS): a failed or interrupted fetch delays the next try by that much, not by a whole cache period. A
+// published sample extends it to the period. No DB lock is held over AWS I/O.
 async function ensureQuota(owner: Pick<Owner, 'runtime'|'ses'|'transport'> & { a: Pick<Actor, 'workspaceId'> }, account: string | undefined, region: string, gate: GateState, refreshMs: number) {
   const { runtime, ses, a, transport } = owner;
   const table = sql.identifier(account ? 'provider_account_limits' : 'sending_region_limits');
   const subject = sql.identifier(account ? 'aws_account_id' : 'workspace_id'), fence = sql.identifier(account ? 'refresh_after' : 'next_allowed_at');
   const key = sql`${subject}=${account ?? a.workspaceId} AND region=${region}`;
   if (account) refreshMs = Math.max(1000, refreshMs);
-  const period = sql`(${refreshMs}::int * interval '1 millisecond')`;
+  const period = sql`(${refreshMs}::int * interval '1 millisecond')`, election = sql`(${Math.min(refreshMs, QUOTA_ELECTION_MS)}::int * interval '1 millisecond')`;
   type Row = { fence: string | null; checked: string; rate: number; max: number; sent: number; customer: number; age_ms: number };
   const customer = account ? sql`customer_sent_24_hours` : sql`0::float8`;
   const cached = sql`SELECT NULL::text AS fence, checked_at::text AS checked, max_send_rate AS rate, max_24_hour_send AS max, sent_last_24_hours AS sent, ${customer} AS customer, extract(epoch FROM clock_timestamp()-checked_at)::float8*1000 AS age_ms
     FROM ${table} WHERE ${key} AND max_send_rate > 0 AND checked_at > clock_timestamp()-${period}`;
   const result = await runtime.db.execute<Row>(sql`WITH elected AS (
-    INSERT INTO ${table}(${subject},region,${fence}) VALUES (${account ?? a.workspaceId},${region},clock_timestamp()+${period})
-    ON CONFLICT (${subject},region) DO UPDATE SET ${fence}=clock_timestamp()+${period}
+    INSERT INTO ${table}(${subject},region,${fence}) VALUES (${account ?? a.workspaceId},${region},clock_timestamp()+${election})
+    ON CONFLICT (${subject},region) DO UPDATE SET ${fence}=clock_timestamp()+${election}
       WHERE (${table}.${fence} IS NULL OR ${table}.${fence} <= clock_timestamp()) AND (${table}.checked_at IS NULL OR ${table}.max_send_rate <= 0 OR ${table}.checked_at <= clock_timestamp()-${period})
     RETURNING ${fence}::text AS fence)
     SELECT fence,NULL::text AS checked,NULL::float8 AS rate,NULL::float8 AS max,NULL::float8 AS sent,NULL::float8 AS customer,NULL::float8 AS age_ms FROM elected UNION ALL ${cached} LIMIT 1`);
@@ -603,21 +622,26 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
 
 // Preflight failures (storage, rendering, hash mismatch) cannot have sent email: reject the row.
 async function rejectPreflight(runtime: Runtime, mail: Mail, error: unknown): Promise<'deferred' | 'rejected'> {
-  const code = error instanceof ApiError ? error.code : 'DISPATCH_PREFLIGHT_FAILED';
-  const retryable = error instanceof ApiError ? error.retryable : true;
+  const known = error instanceof ApiError;
+  const code = known ? error.code : 'DISPATCH_PREFLIGHT_FAILED';
+  const retryable = known ? error.retryable : true;
   if (retryable) {
     // Transient dependency failure (or unknown future content-hash format on rollback): keep the recipient queued
     // instead of rejecting/burning it. On CAMPAIGN_HASH_FORMAT_UNSUPPORTED, pause the parent campaign loudly too.
+    // A missing or changed attachment gets 4 tries 15 s apart; an unexpected exception (a bug, most likely) 8 tries
+    // from 15 s doubling, jittered, about an hour, each logged with its stack. Both count in attachment_failures.
     const missing = code === 'ATTACHMENT_STORAGE_UNAVAILABLE';
     const unsupportedHash = code === 'CAMPAIGN_HASH_FORMAT_UNSUPPORTED';
-    const backoffSecs = unsupportedHash ? 60 : 15;
-    const retry = await runtime.db.execute(sql`UPDATE sending_emails SET lease_until = NULL, attachment_failures=attachment_failures+${missing?1:0}::smallint, scheduled_at = greatest(coalesce(scheduled_at, clock_timestamp()), clock_timestamp() + make_interval(secs => ${backoffSecs}::int)), error_code = ${code}, updated_at = clock_timestamp()
-      WHERE workspace_id = ${mail.workspaceId} AND id = ${mail.id} AND status = 'queued' AND dispatch_version = ${mail.dispatchVersion} ${missing?sql`AND attachment_failures<4`:sql``}`);
+    const counted = missing || !known, tries = missing ? 4 : 8;
+    const backoff = unsupportedHash ? sql`60` : known ? sql`15` : sql`15 * 2 ^ least(attachment_failures, 7) * (0.75 + random() / 2)`;
+    if (!known) logError(error, { code, emailId: mail.id }, 'warn');
+    const retry = await runtime.db.execute(sql`UPDATE sending_emails SET lease_until = NULL, attachment_failures=attachment_failures+${counted?1:0}::smallint, scheduled_at = greatest(coalesce(scheduled_at, clock_timestamp()), clock_timestamp() + make_interval(secs => ${backoff})), error_code = ${code}, updated_at = clock_timestamp()
+      WHERE workspace_id = ${mail.workspaceId} AND id = ${mail.id} AND status = 'queued' AND dispatch_version = ${mail.dispatchVersion} ${counted?sql`AND attachment_failures<${tries}`:sql``}`);
     if (unsupportedHash && mail.campaignId) {
       const msg = error instanceof ApiError ? error.message : 'Paused: this campaign uses a newer content hash format that this release cannot verify.';
       await runtime.db.execute(pauseCampaign({ workspaceId: mail.workspaceId, id: mail.campaignId }, { code, message: msg })).catch(() => {});
     }
-    if (!missing || retry.rowCount) { log('warn', { code, emailId: mail.id, message: 'Dispatch preflight failed; retrying after a short delay.' }); return 'deferred'; }
+    if (!counted || retry.rowCount) { if (known) log('warn', { code, emailId: mail.id, message: 'Dispatch preflight failed; retrying after a short delay.' }); return 'deferred'; }
   }
   const rejected=await runtime.db.execute<{n:number}>(sql`WITH rejected AS (
       UPDATE sending_emails SET status = 'rejected', error_code = ${code}, lease_until = NULL, updated_at = clock_timestamp()
@@ -667,8 +691,16 @@ async function claimGroup(runtime: Runtime, prepared: Prepared[], origins: Map<s
   }));
   const rows = sql`SELECT * FROM jsonb_to_recordset(${JSON.stringify(input)}::jsonb)
         AS x(id text, workspace_id text, dispatch_version int, status text, campaign_id text, actor_key_id text, sender text, mcp_allowed boolean, hosted boolean, feedback_topic text, binding jsonb, destinations jsonb, marketing boolean, notice boolean, topic_id text, held_stream boolean, reply_authors jsonb, snapshot jsonb, token_hash text, token_email text, token_page text, event_id text, external_id text, attempt int)`;
-  const claimed = await db.execute<{ id: string; status: EmailStatus; webhooks:number }>(sql`WITH ${claimCtes(runtime, prepared[0]!.mail.region, rows)} SELECT id,status,(SELECT count(*)::int FROM webhook_jobs) AS webhooks FROM claimed`);
-  return {statuses:new Map(claimed.rows.map(row => [row.id, row.status])),webhooks:claimed.rows[0]?.webhooks??0};
+  // Every row lock the claim takes is on a row reached from `input`, so setting lock_timeout while input is read bounds
+  // every wait: a claim waits at most CLAIM_LOCK_MS for another transaction (55P03), then gives its group back. The
+  // previous value comes back once `claimed` has run, which only matters inside an outer transaction (tests).
+  const limited = sql`before AS MATERIALIZED (SELECT current_setting('lock_timeout') AS lock), ${claimCtes(runtime, prepared[0]!.mail.region,
+    sql`SELECT x.* FROM (${rows}) x WHERE (SELECT set_config('lock_timeout',${String(CLAIM_LOCK_MS)},true) FROM before) IS NOT NULL`)}`;
+  const claimed = await db.execute<{ id: string | null; status: EmailStatus; error_code: string | null; webhooks:number }>(sql`WITH ${limited}
+    SELECT c.id,c.status,c.error_code,(SELECT count(*)::int FROM webhook_jobs) AS webhooks
+    FROM (SELECT set_config('lock_timeout',(SELECT lock FROM before),true) FROM (SELECT count(*) FROM claimed) n) restored LEFT JOIN claimed c ON true`);
+  const rowsClaimed = claimed.rows.filter(row => row.id !== null);
+  return {statuses:new Map(rowsClaimed.map(row => [row.id!, row.status])),busy:new Set(rowsClaimed.filter(row => row.error_code === 'RECIPIENT_BUSY').map(row => row.id!)),webhooks:claimed.rows[0]?.webhooks??0};
 }
 /**
  * A forward's email is sent only while its endpoint is still a confirmed, unpaused forward and every approval behind it
@@ -693,9 +725,15 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
     ), dest AS (
       SELECT x.id AS email_id, x.workspace_id, d.value AS email, d.n FROM input x, jsonb_array_elements_text(x.destinations) WITH ORDINALITY d(value,n)
     ), consent AS MATERIALIZED (
+      -- Shared, so an unsubscribe or suppression committing now is either seen or waits for this decision; skipped when
+      -- another transaction holds the contact for writing (an import, a bulk change), so no tenant's claim waits on it.
       SELECT workspace_id, email, id, suppressed, suppression_reason, deleted_at, marketing_consent FROM audience_contacts
       WHERE (workspace_id, email) IN (SELECT workspace_id, email FROM dest)
-      ORDER BY workspace_id,email FOR UPDATE
+      ORDER BY workspace_id,email FOR SHARE SKIP LOCKED
+    ), busy AS MATERIALIZED (
+      -- A recipient whose contact was skipped above is undecided: its email goes back to the queue for CLAIM_BUSY_MS.
+      SELECT DISTINCT d.email_id FROM dest d WHERE NOT EXISTS (SELECT FROM consent c WHERE c.workspace_id=d.workspace_id AND c.email=d.email)
+        AND EXISTS (SELECT FROM audience_contacts a WHERE a.workspace_id=d.workspace_id AND a.email=d.email)
     ), ${runtime.config.multiTenant ? sql`sponsor_state AS MATERIALIZED (
       -- A sponsor's full pause holds every stream of its other workspaces (migration 231 hosted_sponsor_hold): share-lock
       -- the sibling connections, in id order and before the election's own connection row, so a pause committing now is
@@ -708,7 +746,7 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
       ${runtime.config.multiTenant ? sql`SELECT keys.*,r.* FROM (SELECT DISTINCT workspace_id,split_part(sender,'@',2) AS host FROM input WHERE binding IS NOT NULL) keys
         CROSS JOIN LATERAL ${regionalSender(runtime,claimsOnly,sql`keys.workspace_id`,sql`keys.host`)} r` : sql`SELECT 1`}
     ), eligibility AS MATERIALIZED (
-      SELECT x.id,
+      SELECT x.id, x.id IN (SELECT email_id FROM busy) AS busy,
         CASE WHEN starts_with(x.actor_key_id, 'mcp_') THEN x.mcp_allowed
           WHEN starts_with(x.actor_key_id,'forward:') THEN ${forwardStillAllowed(runtime, sql`x`)}
           -- An owner notice (sendSystemEmail): only from the configured platform workspace, about a committed standing event.
@@ -752,16 +790,16 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
             WHEN x.marketing AND NOT x.notice AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, sql`x.topic_id`)} THEN 'topic_unsubscribed' END AS reason) cause
           WHERE d.email_id=x.id AND cause.reason IS NOT NULL ORDER BY d.n LIMIT 1) AS suppression_reason
       FROM input x
-    ), budget AS MATERIALIZED (SELECT x.id,${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`CASE WHEN x.hosted AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
+    ), budget AS MATERIALIZED (SELECT x.id,${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`CASE WHEN x.hosted AND NOT el.busy AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
         THEN hosted_burst_ok(x.workspace_id,split_part(x.sender,'@',2),jsonb_array_length(x.destinations),NOT x.held_stream) ELSE true END` : sql`true`} AS allowed
       FROM input x JOIN eligibility el USING(id) ORDER BY x.workspace_id,x.sender,x.id), claimed AS (
       UPDATE sending_emails e SET simulated = ${isSimulatedSes(runtime)},
-        status = CASE WHEN NOT b.allowed THEN 'queued' WHEN NOT el.origin_ok OR NOT el.binding_ok OR NOT el.campaign_allowed THEN 'canceled' WHEN el.suppression_reason IS NULL THEN 'attempting' ELSE 'suppressed' END,
-        scheduled_at=CASE WHEN NOT b.allowed THEN date_trunc('minute',statement_timestamp())+interval '1 minute' ELSE e.scheduled_at END,
-        attempt_started_at = CASE WHEN b.allowed AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL THEN clock_timestamp() ELSE e.attempt_started_at END,
-        error_code = CASE WHEN NOT b.allowed THEN 'HOSTED_BURST_LIMIT' WHEN NOT el.binding_ok AND x.binding IS NOT NULL THEN 'SENDER_BINDING_CHANGED' WHEN NOT el.origin_ok OR NOT el.binding_ok THEN 'ORIGIN_KEY_REVOKED' WHEN NOT el.campaign_allowed THEN 'CAMPAIGN_CANCELED' WHEN el.suppression_reason IS NULL THEN nullif(e.error_code,'HOSTED_BURST_LIMIT') ELSE 'RECIPIENT_INELIGIBLE' END,
-        suppression_reason = CASE WHEN el.origin_ok AND el.binding_ok AND el.campaign_allowed THEN el.suppression_reason END,
-        ${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`feedback_topic_arn=x.feedback_topic,` : sql``} snapshot = CASE WHEN b.allowed THEN coalesce(x.snapshot, e.snapshot) ELSE e.snapshot END, lease_until = NULL, updated_at = clock_timestamp()
+        status = CASE WHEN el.busy OR NOT b.allowed THEN 'queued' WHEN NOT el.origin_ok OR NOT el.binding_ok OR NOT el.campaign_allowed THEN 'canceled' WHEN el.suppression_reason IS NULL THEN 'attempting' ELSE 'suppressed' END,
+        scheduled_at=CASE WHEN el.busy THEN clock_timestamp()+${CLAIM_BUSY_MS}::int*interval '1 millisecond' WHEN NOT b.allowed THEN date_trunc('minute',statement_timestamp())+interval '1 minute' ELSE e.scheduled_at END,
+        attempt_started_at = CASE WHEN NOT el.busy AND b.allowed AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL THEN clock_timestamp() ELSE e.attempt_started_at END,
+        error_code = CASE WHEN el.busy THEN 'RECIPIENT_BUSY' WHEN NOT b.allowed THEN 'HOSTED_BURST_LIMIT' WHEN NOT el.binding_ok AND x.binding IS NOT NULL THEN 'SENDER_BINDING_CHANGED' WHEN NOT el.origin_ok OR NOT el.binding_ok THEN 'ORIGIN_KEY_REVOKED' WHEN NOT el.campaign_allowed THEN 'CAMPAIGN_CANCELED' WHEN el.suppression_reason IS NULL THEN CASE WHEN e.error_code IN ('HOSTED_BURST_LIMIT','RECIPIENT_BUSY') THEN NULL ELSE e.error_code END ELSE 'RECIPIENT_INELIGIBLE' END,
+        suppression_reason = CASE WHEN el.busy THEN e.suppression_reason WHEN el.origin_ok AND el.binding_ok AND el.campaign_allowed THEN el.suppression_reason END,
+        ${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`feedback_topic_arn=x.feedback_topic,` : sql``} snapshot = CASE WHEN b.allowed AND NOT el.busy THEN coalesce(x.snapshot, e.snapshot) ELSE e.snapshot END, lease_until = NULL, updated_at = clock_timestamp()
       FROM input x JOIN eligibility el ON el.id = x.id JOIN budget b ON b.id=x.id
       -- e.status is compared with x.status ('queued' in every input row), never a literal, so sending_emails has no condition
       -- of its own: the planner reaches it only by primary key from each input row, since any other way reads the whole
@@ -847,8 +885,12 @@ async function sendOne(runtime: Runtime, a: Actor, ses: SESv2Client, item: Prepa
     if ((status === 429 || status === 400) && /daily (?:message |sending )?quota exceeded/i.test(failure.message ?? '')) {
       return { mail, type: 'provider_throttled', errorCode: 'SES_DAILY_QUOTA_EXHAUSTED', data: { code: 'SES_DAILY_QUOTA_EXHAUSTED', retryable: true } };
     }
-    if (status === 429 && providerRetries < 5) {
-      return { mail, type: 'provider_throttled', errorCode: 'SES_THROTTLED', data: { code: 'SES_THROTTLED', retryable: true, attempt: providerRetries + 1 }, requeueAt: new Date(Date.now() + Math.min(60000, 2000 * 2 ** providerRetries)).toISOString() };
+    // Per-second throttling: every 429, and a 400 SES names as throttling ("Maximum sending rate exceeded"). The account
+    // is busy, not refusing this message, so it waits longer each time and is never rejected for it.
+    // Whole words only: a refusal that names an address like throttle@example.com is a refusal.
+    if (status === 429 || (status === 400 && (/^(?:Throttl|TooManyRequests|RequestThrottled)/i.test(failure.name ?? '') || /maximum sending rate exceeded|\brate exceeded\b|\bthrottl(?:ed|ing)\b/i.test(failure.message ?? '')))) {
+      const wait = jittered(THROTTLE_MS * 2 ** Math.min(providerRetries, 10), THROTTLE_MAX_MS);
+      return { mail, type: 'provider_throttled', errorCode: 'SES_THROTTLED', data: { code: 'SES_THROTTLED', retryable: true, attempt: providerRetries + 1 }, requeueAt: new Date(Date.now() + wait).toISOString() };
     }
     return definitive
       ? { mail, type: 'reject', errorCode: failure.name ?? 'SES_REJECTED', data: { code: failure.name ?? 'SES_REJECTED', retryable: false, ...diagnostics } }
@@ -886,7 +928,7 @@ async function recordOutcomes(runtime: Runtime, outcomes: Outcome[]) {
       UPDATE sending_emails e SET
         status = x.next_status, provider_id = coalesce(x.provider_id, e.provider_id),
         event_outcomes = e.event_outcomes | x.outcome_bit::smallint,
-        error_code = CASE WHEN x.next_status='queued' THEN x.error_code WHEN x.type = 'accepted' AND e.error_code IN ('SES_DAILY_QUOTA_EXHAUSTED','SES_ACCOUNT_SENDING_PAUSED','SES_CREDENTIALS_INVALID','INTERRUPTED_PROVIDER_ATTEMPT') THEN NULL ELSE coalesce(x.error_code, e.error_code) END,
+        error_code = CASE WHEN x.next_status='queued' THEN x.error_code WHEN x.type = 'accepted' THEN NULL ELSE coalesce(x.error_code, e.error_code) END,
         account_pause_started_at = CASE WHEN x.error_code='SES_ACCOUNT_SENDING_PAUSED' THEN coalesce(e.account_pause_started_at,clock_timestamp()) END,
         dispatch_version = CASE WHEN x.next_status = 'queued' THEN e.dispatch_version + 1 ELSE e.dispatch_version END,
         scheduled_at = CASE WHEN x.next_status = 'queued' THEN clock_timestamp() + x.wait_ms * interval '1 millisecond' ELSE e.scheduled_at END,
@@ -1089,7 +1131,26 @@ async function dispatchBatch(base: Runtime, lane: Lane, leased: Leased[]): Promi
     if (!gate.quota || Date.now() >= (gate.refreshAt ?? 0)) {
       // Lanes of one shard share one refresh; shards share one GetAccount through ensureQuota's election.
       lane.refresh ??= phase('quota', () => ensureQuota(first, options.accountId, options.region, gate, options.quotaRefreshMs)).finally(() => { lane.refresh = undefined; });
-      if (!await lane.refresh) { for (const item of ready) logEmail(lane, item.mail, item.trace, 'deferred', 'SES_QUOTA_UNKNOWN'); await releaseLeases(base, ready.map(item => item.mail)); return { processed: 0, blocked: true }; }
+      // A refresh that fails (GetAccount throttled or down, or a sibling's refresh that never published) keeps pacing on
+      // the previous sample while it is recent, and tries again in QUOTA_RETRY_MS. A provider refusal (an ApiError: SES
+      // sending disabled) and a cold shard with no recent sample still stop; the run always says when to try again.
+      const recent = !!gate.quota && Date.now() - gate.quota.checkedAt < QUOTA_STALE_MS;
+      let failure: { error: unknown } | undefined;
+      const refreshed = await lane.refresh.catch(error => {
+        if (!recent || error instanceof ApiError || error instanceof ModuleLoadError) failure = { error };
+        else logError(error, { code: 'SES_QUOTA_REFRESH_FAILED', accountId: options.accountId, region: options.region }, 'warn');
+        return false;
+      });
+      if (!refreshed) {
+        if (!failure && recent) gate.refreshAt = Date.now() + QUOTA_RETRY_MS;
+        else {
+          for (const item of ready) logEmail(lane, item.mail, item.trace, 'deferred', 'SES_QUOTA_UNKNOWN');
+          await releaseLeases(base, ready.map(item => item.mail));
+          if (failure) throw failure.error;
+          counters.quotaRetryAt = Math.min(counters.quotaRetryAt ?? Infinity, Date.now() + QUOTA_RETRY_MS);
+          return { processed: 0, blocked: true };
+        }
+      }
       await options.onGate?.(gate);
     }
   }
@@ -1108,10 +1169,12 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
     log('warn', { code: 'SES_DAILY_QUOTA_EXHAUSTED', region: options.region });
     return { processed: 0, blocked: true };
   }
-  const loadAttachments = batchAttachments(base, ready);
-  const unscreened: Mail[] = [], linkWaiting: Mail[] = [];
+  const loadAttachments = batchAttachments(base, ready), readsBefore = attachmentReads();
+  const unscreened: Mail[] = [], linkWaiting: Mail[] = [], storageWaiting: Mail[] = [];
   const prepare = async (item: typeof ready[number]) => {
     try {
+      // While storage is down, attachment mail waits without asking it again.
+      if ((gate.storageUntil ?? 0) > Date.now() && item.mail.snapshot.attachments.length) throw storageUnavailable();
       if (item.contentBytes) {
         // Read only after reserving the page. Do not attach the body to the lease:
         // that array outlives this send, even when its byte reservation is released.
@@ -1131,6 +1194,8 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
       // A campaign launched before link hosts whose sending domain has none active yet (src/link-domains.ts): the email
       // stays queued, as its campaign waits, and is tried again in 15 minutes instead of failing.
       if (error instanceof ApiError && error.code === 'LINK_RECORD_REQUIRED') { linkWaiting.push(item.mail); counters.deferred++; lane.advanced++; logEmail(lane, item.mail, item.trace, 'deferred', 'LINK_RECORD_REQUIRED'); return; }
+      // Object storage is down (src/adapters/storage.ts): the email waits out the shard's storage backoff below.
+      if (error instanceof ApiError && error.code === 'STORAGE_TEMPORARILY_UNAVAILABLE') { storageWaiting.push(item.mail); counters.deferred++; lane.advanced++; logEmail(lane, item.mail, item.trace, 'deferred', error.code); return; }
       counters.skipped++; lane.advanced++;
       logEmail(lane, item.mail, item.trace, await rejectPreflight(item.owner.runtime, item.mail, error), error instanceof ApiError ? error.code : 'DISPATCH_PREFLIGHT_FAILED');
     }
@@ -1192,6 +1257,19 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
     FROM jsonb_to_recordset(${JSON.stringify(unscreened.map(m => ({ workspace_id: m.workspaceId, id: m.id, version: m.dispatchVersion, status: 'queued' })))}::jsonb) x(workspace_id text, id text, version int, status text)
     WHERE e.workspace_id = x.workspace_id AND e.id = x.id AND e.dispatch_version = x.version AND e.status = x.status`);
   if (linkWaiting.length) await releaseLeases(base, linkWaiting, Date.now() + LINK_RECORD_RECHECK_MS);
+  // One window for the shard while storage stays down, doubling each time it opens again, and the run wakes when it
+  // ends. Only a batch that read storage itself closes it: one whose attachment mail all waited or came from the cache
+  // proves nothing. The waiting rows keep their leases until it ends: one statement, no per-row retry.
+  if (storageWaiting.length) {
+    let until = gate.storageUntil ?? 0;
+    if (until <= Date.now()) {
+      gate.storageUntil = until = Date.now() + jittered(STORAGE_MS * 2 ** Math.min(gate.storageStreak ?? 0, 10), STORAGE_MAX_MS);
+      gate.storageStreak = (gate.storageStreak ?? 0) + 1;
+    }
+    log('warn', { code: 'STORAGE_TEMPORARILY_UNAVAILABLE', region: options.region, count: storageWaiting.length, retryInMs: until - Date.now() });
+    counters.paceRetryAt = Math.min(counters.paceRetryAt ?? Infinity, until);
+    await releaseLeases(base, storageWaiting, until);
+  } else if (attachmentReads() > readsBefore) { delete gate.storageUntil; delete gate.storageStreak; }
   return { processed: ready.length, blocked: false };
 }
 const logLost = (count:number) => log('warn', { code:'DISPATCH_CLAIM_LOST', count, message:'Rows changed between lease and claim; they will be reconsidered on the next pass.' });
@@ -1260,7 +1338,10 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
   if (!prepared.length) return;
   const {gate, options, counters, phase} = lane;
   const pendingRecords: Promise<void>[] = [];
-  const delayed: Mail[] = [], unpaced: Mail[] = [];
+  const delayed: Mail[] = [], unpaced: Mail[] = [], busy: Mail[] = [];
+  // When mail a busy claim gave back is due again, and the run's wake with it: the run ends idle, not polling for it.
+  let busyUntil: number | undefined;
+  const busyWake = () => { busyUntil ??= Date.now() + CLAIM_BUSY_MS; counters.paceRetryAt = Math.min(counters.paceRetryAt ?? Infinity, busyUntil); };
   const ordered = interleaveByOwner(prepared, item => item.snapshot.kind, item => item.mail.workspaceId, counters.batches + (options.shard?.index ?? 0));
   for (const candidates of chunk(ordered, options.sendConcurrency)) {
     if (options.stop?.()) { for (const item of candidates) { unpaced.push(item.mail); counters.claimed--; counters.deferred++; } continue; }
@@ -1294,14 +1375,28 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
     // Read MCP grants in the claim's transaction and hold their SHARE locks through the durable attempt, never during
     // SES I/O, so a grant revoked during an earlier group's sends stops this group. Other origins need just the claim.
     const checkMcp = group.some(item => item.mail.actorKeyId.startsWith('mcp_'));
-    let webhooks=0;
+    let webhooks=0, contended=new Set<string>();
     const claim = async (items: Prepared[], db: DbExecutor) => {
-      const result=await claimGroup(base,items,checkMcp ? await originDecisions(items,db) : new Map(),db); webhooks=result.webhooks; return result.statuses;
+      const result=await claimGroup(base,items,checkMcp ? await originDecisions(items,db) : new Map(),db); webhooks=result.webhooks; contended=result.busy; return result.statuses;
     };
-    const statuses = await phase('claim', () => checkMcp ? base.db.transaction(tx => claim(group, tx)) : claim(group, base.db));
+    let statuses: Map<string, EmailStatus>;
+    try { statuses = await phase('claim', () => checkMcp ? base.db.transaction(tx => claim(group, tx)) : claim(group, base.db)); }
+    catch (error) {
+      // Another transaction held a row the claim needed past CLAIM_LOCK_MS (or the statement was cancelled): the claim
+      // changed nothing. Its group goes back to the queue for CLAIM_BUSY_MS and the next group goes on.
+      if (!['55P03', '57014'].includes(databaseCodeOf(error) ?? '')) throw error;
+      log('warn', { code: 'DISPATCH_CLAIM_BUSY', region: options.region, count: group.length, sqlstate: databaseCodeOf(error) });
+      for (const item of group) { lane.held.recipients -= cost(item); busy.push(item.mail); counters.claimed--; counters.deferred++; logEmail(lane, item.mail, item.trace, 'deferred', 'DISPATCH_CLAIM_BUSY'); }
+      busyWake();
+      continue;
+    }
     lane.advanced += group.length;
     if (webhooks) pendingRecords.push(wakeWebhooks(base,webhooks));
-    for(const item of group) if(statuses.get(item.mail.id)==='queued') { deferBurst(lane.deferred,item.mail.workspaceId,item.snapshot.kind); logEmail(lane, item.mail, item.trace, 'deferred', 'HOSTED_BURST_LIMIT'); }
+    for(const item of group) if(statuses.get(item.mail.id)==='queued') {
+      // The claim set its scheduled_at CLAIM_BUSY_MS ahead on the database's clock, before this one reads its own.
+      if (contended.has(item.mail.id)) { busyWake(); logEmail(lane, item.mail, item.trace, 'deferred', 'RECIPIENT_BUSY'); continue; }
+      deferBurst(lane.deferred,item.mail.workspaceId,item.snapshot.kind); logEmail(lane, item.mail, item.trace, 'deferred', 'HOSTED_BURST_LIMIT');
+    }
     const attempting = group.filter(item => statuses.get(item.mail.id) === 'attempting');
     for (const item of group) if (statuses.get(item.mail.id) !== 'attempting') lane.held.recipients -= cost(item);
     const lost = group.filter(item => !statuses.has(item.mail.id));
@@ -1339,6 +1434,7 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
   if (unpaced.length) counters.idle = false;
   if (marketing.length || unpaced.length) await releaseLeases(base, [...marketing, ...unpaced]);
   if (direct.length) await releaseLeases(base, direct, counters.quotaRetryAt);
+  if (busy.length) await releaseLeases(base, busy, busyUntil);
   await Promise.all(pendingRecords);
 }
 async function flushFinishing(runtime: Runtime, lane: Lane) {
@@ -1469,7 +1565,12 @@ export async function runDispatcher(runtime: Runtime, options: DispatcherOptions
   await flushFinishing(runtime, lane);
   if (blocked) counters.idle = true;
   const paceUntil = Math.max(gate.nextAllowedAt, gate.marketingAllowedAt ?? 0);
-  if (paceUntil >= Date.now() + MAX_PRE_SEND_MS) { counters.paceRetryAt = Math.ceil(paceUntil); counters.idle = true; }
+  // Paced far ahead: the run sleeps until the pace ends, or until an earlier retry (storage back, a busy claim's mail due)
+  // if transactional mail could go by then.
+  if (paceUntil >= Date.now() + MAX_PRE_SEND_MS) {
+    counters.paceRetryAt = Math.ceil(Math.min(paceUntil, Math.max(counters.paceRetryAt ?? Infinity, txReadyAt(gate, Date.now()))));
+    counters.idle = true;
+  }
   counters.durationMs = Date.now() - started;
   // Idle polls are silent; runs that moved mail (or hit the budget) are the throughput record.
   if (counters.claimed || !counters.idle) log('info', { code: 'DISPATCH_RUN', accountId: options.accountId, region: options.region, shard: options.shard?.index ?? 0, ...counters, quota: gate.quota?.maxSendRate ?? null, rate: shardRate(gate, options.shard, pacing), braked: (gate.brakeUntil ?? 0) > Date.now(), wakeMs: options.wakeMs });
