@@ -1903,19 +1903,27 @@ async function admitSends(call: SendCall, body: unknown, out: Outgoing[], identi
     ? { workspace: sql`k.workspace_id`, uploader: sql`k.id`, domains: sql`k.domains`, mailboxAccess: sql`k.permissions ? 'manage'` }
     : { workspace: sql`k.workspace_id`, uploader: sql`${identity.actor.tokenId ?? identity.actor.keyId}::text`, domains: sql`k.domains`, mailboxAccess: sql`${actorMailAccess(identity.actor) !== null}::boolean` });
   // A scheduled send is charged nothing now: its release admits it as a send at its time (releaseScheduled).
+  // A send with an ineligible recipient writes nothing, so it must not claim its key either: send_admission's claim
+  // commits a populated receipt with the statement, and a sibling CTE can't delete a row the function inserted (one
+  // snapshot for the whole statement). It asks for the claim only when no recipient is ineligible; otherwise the key is
+  // only read, as idempotency_claim reads it: a committed claim replays, a key another request holds is busy.
+  const claim = key !== undefined ? { path: call.path, key, hash: hash! } : undefined;
   const decision = await admission(runtime, sql`k.workspace_id`, sql`jsonb_build_object('id',k.id,'domains',k.domains)`, { stage: 'send', locks: 'take', mails: admissionMails(runtime, out),
-    ...(at ? scheduledCharges(runtime, out, at) : charges(runtime, out)), ...(key !== undefined ? { claim: { path: call.path, key, hash: hash!, receipt } } : {}), ...(options.campaign ? { campaign: options.campaign } : {}) }, undefined, assets);
-  const { rows: [result] } = await (call.db ?? runtime.db).execute<Principal & { s: Admitted | Refused | ClaimState | null; ineligible: { ord: number; email: string; reason: string }[] | null; max_send_rate: number | null }>(sql`WITH ${'credential' in identity ? sql`${identity.credential},` : sql``} state AS MATERIALIZED (
-    SELECT k.*, CASE WHEN k.used IS NULL THEN jsonb_build_object('previous',NULL,'busy',true) WHEN k.used<=k.max_requests AND k.permissions ?| ARRAY['manage','send'] THEN ${decision} END s FROM (${principal}) k
-  ), raw_submitted AS MATERIALIZED (SELECT k.workspace_id,k.id AS actor_id,m.ord,m.id,m.hash,m.email,m.screened,m.count_screened,m.marketing,m.destinations,m.reply_authors,
-      m.snapshot||jsonb_build_object('region',x->>'region')||CASE WHEN jsonb_typeof(x->'binding')='object' THEN jsonb_build_object('binding',x->'binding') ELSE '{}' END AS snapshot
-    FROM state k,jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) m(ord int,id text,hash text,email text,screened boolean,count_screened boolean,marketing boolean,destinations jsonb,reply_authors jsonb,snapshot jsonb) CROSS JOIN LATERAL (SELECT k.s->'mails'->m.ord AS x) r
-    WHERE k.s->>'allowed'='true'
-  ), ineligible AS MATERIALIZED (${skipSuppression ? sql`SELECT NULL::int AS ord, NULL::text AS email, NULL::text AS reason WHERE false` : sql`
+    ...(at ? scheduledCharges(runtime, out, at) : charges(runtime, out)), ...(options.campaign ? { campaign: options.campaign } : {}) },
+    claim && sql`CASE WHEN EXISTS (SELECT FROM candidate_ineligible) THEN '{}'::jsonb ELSE ${JSON.stringify({ claim: { ...claim, receipt } })}::jsonb END`, assets);
+  const keyRead = claim ? sql`CASE WHEN EXISTS (SELECT FROM candidate_ineligible) THEN coalesce(
+      (SELECT jsonb_build_object('previous',i.result,'hash',i.request_hash,'createdAt',i.created_at) FROM sending_idempotency i
+        WHERE i.workspace_id=k.workspace_id AND i.actor_key_id=k.id AND i.path=${claim.path} AND i.request_key=${claim.key}),
+      CASE WHEN NOT idempotency_lock(k.workspace_id,k.id,${claim.path},${claim.key}) THEN jsonb_build_object('previous',NULL,'hash',${claim.hash}::text,'busy',true) END) END` : sql`NULL::jsonb`;
+  const { rows: [result] } = await (call.db ?? runtime.db).execute<Principal & { s: Admitted | Refused | ClaimState | null; ineligible: { ord: number; email: string; reason: string }[] | null; max_send_rate: number | null }>(sql`/* send admission: idempotency claim, send_admission, the send's rows (named first: pg_stat_activity keeps a statement's first 1 KB) */
+  WITH ${'credential' in identity ? sql`${identity.credential},` : sql``} principal AS MATERIALIZED (${principal}),
+  submitted_rows AS MATERIALIZED (SELECT * FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) m(ord int,id text,hash text,email text,screened boolean,count_screened boolean,marketing boolean,destinations jsonb,reply_authors jsonb,snapshot jsonb)),
+  -- Recipients the send can't go to, read before the decision so that it claims the key only for a send it can write.
+  candidate_ineligible AS MATERIALIZED (${skipSuppression ? sql`SELECT NULL::int AS ord, NULL::text AS email, NULL::text AS reason WHERE false` : sql`
     SELECT r.ord, d.email, cause.reason
-    FROM raw_submitted r
+    FROM principal k CROSS JOIN submitted_rows r
     CROSS JOIN LATERAL jsonb_array_elements_text(r.destinations) WITH ORDINALITY d(email, n)
-    LEFT JOIN audience_contacts c ON c.workspace_id = r.workspace_id AND c.email = d.email
+    LEFT JOIN audience_contacts c ON c.workspace_id = k.workspace_id AND c.email = d.email
     CROSS JOIN LATERAL (SELECT CASE
       WHEN r.marketing AND c.marketing_consent = 'unsubscribed' THEN 'unsubscribed'
       WHEN c.suppressed AND NOT coalesce(NOT r.marketing AND c.suppression_reason = 'email_validation'
@@ -1927,7 +1935,15 @@ async function admitSends(call: SendCall, body: unknown, out: Outgoing[], identi
     END AS reason) cause
     WHERE cause.reason IS NOT NULL
     ORDER BY r.ord, d.n`}
+  ), state AS MATERIALIZED (
+    SELECT k.*, CASE WHEN k.used IS NULL THEN jsonb_build_object('previous',NULL,'busy',true) WHEN k.used<=k.max_requests AND k.permissions ?| ARRAY['manage','send'] THEN coalesce(${keyRead}, ${decision}) END s FROM principal k
+  ), raw_submitted AS MATERIALIZED (SELECT k.workspace_id,k.id AS actor_id,m.ord,m.id,m.hash,m.email,m.screened,m.count_screened,m.marketing,m.destinations,m.reply_authors,
+      m.snapshot||jsonb_build_object('region',x->>'region')||CASE WHEN jsonb_typeof(x->'binding')='object' THEN jsonb_build_object('binding',x->'binding') ELSE '{}' END AS snapshot
+    FROM state k,submitted_rows m CROSS JOIN LATERAL (SELECT k.s->'mails'->m.ord AS x) r
+    WHERE k.s->>'allowed'='true'
   ),
+  -- Reported only for a send the decision allowed: a refusal (or a replay) answers first, as before.
+  ineligible AS MATERIALIZED (SELECT i.* FROM candidate_ineligible i WHERE EXISTS (SELECT FROM state k WHERE k.s->>'allowed'='true')),
   submitted AS MATERIALIZED (SELECT * FROM raw_submitted WHERE NOT EXISTS (SELECT 1 FROM ineligible)),
   inserted AS (INSERT INTO sending_emails(id,workspace_id,actor_key_id,region,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,screened,status,scheduled_at)
     SELECT id,workspace_id,actor_id,snapshot->>'region',snapshot->>'from',snapshot->'to',snapshot->'cc',snapshot->'bcc',snapshot->>'subject',snapshot,${sim},screened,${at ? 'scheduled' : 'queued'},${at ?? null}::timestamptz FROM submitted),
@@ -1946,11 +1962,8 @@ async function admitSends(call: SendCall, body: unknown, out: Outgoing[], identi
   if ('previous' in state) return replay<typeof receipt>(state, hash!);
   await refusedAttachments(runtime, a, state as Admitted | Refused, out, batch);
   const decided = admitted(runtime, state as Admitted | Refused, a.workspaceId, { batch, invalid: i => out[i]!.invalid, oversize: i => out[i]!.oversize });
-  if (result.ineligible?.length) {
-    // The statement's own claim holds this receipt, and nothing was queued: free the key so a retry is judged again.
-    if (key !== undefined) await (call.db ?? runtime.db).execute(sql`DELETE FROM sending_idempotency WHERE workspace_id = ${result.workspace_id} AND actor_key_id = ${result.id} AND path = ${call.path} AND request_key = ${key}`);
-    throw recipientIneligibleError(result.ineligible, batch);
-  }
+  // Nothing was queued and the key wasn't claimed (above): a retry is judged again.
+  if (result.ineligible?.length) throw recipientIneligibleError(result.ineligible, batch);
   if (guarded) {
     const counts = new Map<string, number>();
     for (const { snapshot, recipients } of out) if (snapshot.kind === 'marketing' && snapshot.linkOrigin) counts.set(snapshot.linkOrigin, (counts.get(snapshot.linkOrigin) ?? 0) + recipients);

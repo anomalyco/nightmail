@@ -114,7 +114,10 @@ export async function mutate<T>(c: Ctx, operator: OperatorIdentity, workspaceId:
   const hash = operatorRequestHash(c, body);
   return c.env.db.transaction(async tx => {
     if (key) {
-      const { rows: [prior] } = await tx.execute<{ request_hash: string; response: T }>(sql`SELECT request_hash,response FROM operator_idempotency WHERE operator_id=${operator.userId} AND key=${key} FOR UPDATE`);
+      // FOR UPDATE locks nothing before the first request's row exists: the key's lock serializes concurrent retries, so
+      // the second waits and then replays the first's response (not a 23505 on the insert, or the change made twice).
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([operator.userId, key])}, 23117))`);
+      const { rows: [prior] } = await tx.execute<{ request_hash: string; response: T }>(sql`SELECT request_hash,response FROM operator_idempotency WHERE operator_id=${operator.userId} AND key=${key}`);
       if (prior) { if (prior.request_hash !== hash) throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', 'This Idempotency-Key was used for a different request.'); return prior.response; }
     }
     const { result, audit } = await work(tx, expectVersion);

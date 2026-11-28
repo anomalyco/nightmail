@@ -368,12 +368,14 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
         throw error;
       }
     }
-    // A band change is on the timeline (one statement: the sequence row lock orders it with applyChange).
-    if (limits.limit !== row.daily_limit) await runtime.db.execute(sql`WITH s AS (UPDATE sender_standing SET sequence=sequence+1 WHERE workspace_id=${row.workspace_id} RETURNING workspace_id,sequence,step)
+    // A band change is on the timeline (one statement: the sequence row lock orders it with applyChange). Only at the
+    // version read, like the routine update below that writes the new limit: after a concurrent change the next run decides.
+    if (limits.limit !== row.daily_limit) await runtime.db.execute(sql`WITH s AS (UPDATE sender_standing SET sequence=sequence+1 WHERE workspace_id=${row.workspace_id} AND version=${row.version} RETURNING workspace_id,sequence,step)
       INSERT INTO standing_events(id,workspace_id,sequence,kind,from_step,to_step,actor,details)
       SELECT ${id('stev')},workspace_id,sequence,'limit',step,step,'{"kind":"system","via":"job"}'::jsonb,${JSON.stringify({ from: row.daily_limit, to: limits.limit, score: moved.score })}::jsonb FROM s`);
     // Keep the OK/Notice card current even when its step doesn't move. A below-line observation is
-    // display evidence, not a standing change or an alert; never replace a concurrent operator decision.
+    // display evidence, not a standing change or an alert; never replace a concurrent operator decision: the update
+    // applies only at the version read (an operator resume, freeze or growth lift moves it), else the next run recomputes.
     routine.push({ workspace_id: row.workspace_id, version: row.version, reasons: next.step === 'ok' ? noticeReasons(input.day, 'ok') : next.reasons,
       phase: moved.phase, first_recipients: moved.firstRecipients, calibrated_at: moved.calibratedAt, score: moved.score, day_score: moved.dayScore, score_day: moved.scoreDay,
       target: q.target, quality: q.quality, volume: q.volume, factors: q.factors, band_limit: limits.band, daily_limit: limits.limit, clear_since: next.step === prev.step ? next.clearSince : null,
@@ -384,8 +386,8 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
       growth_until timestamptz,growth_cap int,growth_hour timestamptz,growth_quality numeric)),
     updated AS (UPDATE sender_standing s SET phase=r.phase,first_recipients=r.first_recipients,calibrated_at=r.calibrated_at,score=r.score,day_score=r.day_score,score_day=r.score_day,target=r.target,
       quality=r.quality,volume=r.volume,factors=r.factors,band_limit=r.band_limit,daily_limit=r.daily_limit,clear_since=CASE WHEN s.step=r.step THEN r.clear_since ELSE s.clear_since END,
-      reasons=CASE WHEN s.version=r.version AND s.step=r.step AND r.step IN ('ok','notice') THEN r.reasons ELSE s.reasons END,
-      strike_until=r.strike_until,growth_until=r.growth_until,growth_cap=r.growth_cap,growth_hour=r.growth_hour,growth_quality=r.growth_quality,computed_at=now() FROM r WHERE s.workspace_id=r.workspace_id RETURNING s.*)
+      reasons=CASE WHEN s.step=r.step AND r.step IN ('ok','notice') THEN r.reasons ELSE s.reasons END,
+      strike_until=r.strike_until,growth_until=r.growth_until,growth_cap=r.growth_cap,growth_hour=r.growth_hour,growth_quality=r.growth_quality,computed_at=now() FROM r WHERE s.workspace_id=r.workspace_id AND s.version=r.version RETURNING s.*)
     INSERT INTO sender_score_daily(workspace_id,day,score,quality,target,daily_limit,step) SELECT workspace_id,(now() AT TIME ZONE 'UTC')::date,score,quality,target,daily_limit,step FROM updated
     ON CONFLICT(workspace_id,day) DO UPDATE SET score=excluded.score,quality=excluded.quality,target=excluded.target,daily_limit=excluded.daily_limit,step=excluded.step`);
   for (const f of finished) await evaluationFinished(runtime.db, f.workspaceId, f.limited);

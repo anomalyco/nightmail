@@ -471,18 +471,59 @@ export async function settleInvoice(runtime: Runtime, attemptId: string, invoice
     invoiceUrl: invoice.hosted_invoice_url ?? null, invoicePdf: invoice.invoice_pdf ?? null, paymentIntent: invoicePaymentIntent(invoice) });
 }
 
+type ChargeGuard = { recharge_enabled: boolean; account_fingerprint: string | null; blocked: boolean };
+type ChargeStop = { code: string; message: string; status: 'failed' | 'canceled' };
+/**
+ * Why an open off-session attempt must not charge now, although it once could: its card or the workspace's was blocked
+ * (a dispute or an early fraud warning), the workspace saved another card (the attempt records the one it was opened
+ * for; an attempt from before that column has none and is not compared), or auto-recharge was turned off after the
+ * recharge opened. Reconciliation re-runs the charge for up to 22 h, so each run asks again.
+ */
+function stopCharge(a: AttemptRow & ChargeGuard): ChargeStop | null {
+  if (a.card_fingerprint !== null && a.card_fingerprint !== a.account_fingerprint) return { code: 'card_changed', message: 'The saved card changed before this charge went through.', status: 'canceled' };
+  if (a.blocked) return { code: 'card_blocked', message: 'This card can no longer be charged.', status: 'failed' };
+  if (a.kind === 'recharge' && !a.recharge_enabled) return { code: 'recharge_disabled', message: 'Auto-recharge was turned off before this charge went through.', status: 'canceled' };
+  return null;
+}
+/**
+ * Ends an attempt stopCharge refused without charging: its invoice (if one was made) is voided or deleted first, and an
+ * invoice Stripe reports paid meanwhile is credited instead. Stripe not answering, or refusing to close the invoice,
+ * leaves the attempt open for the next reconciliation.
+ */
+async function abandonCharge(runtime: Runtime, cfg: StripeConfig, a: AttemptRow, stop: ChargeStop): Promise<string> {
+  if (a.stripe_invoice) {
+    let invoice: StripeObject;
+    try { invoice = await stripeRequest(cfg, 'GET', `/v1/invoices/${encodeURIComponent(a.stripe_invoice)}`, { expand: ['payments'] }); }
+    catch (error) {
+      if (!(error instanceof StripeError)) throw error;
+      if (!error.missing) { await touch(runtime, a.id); return a.status; }
+      invoice = { id: a.stripe_invoice, status: 'deleted' };
+    }
+    if (invoice.status === 'paid') return settleInvoice(runtime, a.id, invoice);
+    if (!await closeInvoice(cfg, invoice, a.idempotency_key)) { await touch(runtime, a.id); return a.status; }
+  }
+  log('warn', { code: 'BILLING_CHARGE_STOPPED', workspaceId: a.workspace_id, attemptId: a.id, kind: a.kind, reason: stop.code });
+  // A blocked card ends auto-recharge with its notice; a changed card or auto-recharge turned off only frees the next trigger.
+  return failAttempt(runtime, a.id, stop.code, stop.message, stop.status);
+}
+
 /**
  * The off-session charge behind saved-card top-ups and auto-recharge, always invoice-first so tax and receipts match
  * Checkout: create a draft invoice, add the credit line, finalize, pay with the saved card. Each step has its own
  * idempotency key, so reconciliation can re-run it within Stripe's key window. A card error voids the invoice and fails
  * the attempt (a recharge then turns auto-recharge off); no answer leaves it pending for reconciliation.
+ * Every run (reconciliation re-runs it for up to 22 h) first checks the attempt still may charge: see stopCharge.
  */
 export async function chargeSavedCard(runtime: Runtime, attemptId: string): Promise<string> {
   const cfg = stripeConfig(runtime);
-  const [a] = await rows<AttemptRow & { stripe_customer: string | null; stripe_payment_method: string | null }>(runtime.db, sql`SELECT p.*, b.stripe_customer, b.stripe_payment_method
+  const [a] = await rows<AttemptRow & ChargeGuard & { stripe_customer: string | null; stripe_payment_method: string | null }>(runtime.db, sql`SELECT p.*, b.stripe_customer, b.stripe_payment_method,
+    coalesce(b.recharge_enabled, false) AS recharge_enabled, b.card_fingerprint AS account_fingerprint,
+    EXISTS (SELECT FROM billing_blocked_cards c WHERE c.fingerprint IN (p.card_fingerprint, b.card_fingerprint)) AS blocked
     FROM billing_payment_attempts p LEFT JOIN billing_accounts b ON b.workspace_id=p.workspace_id WHERE p.id=${attemptId}`);
   if (!a || !OPEN.includes(a.status) || (a.kind !== 'saved_card' && a.kind !== 'recharge')) return a?.status ?? 'missing';
   if (!a.stripe_customer || !a.stripe_payment_method) return failAttempt(runtime, attemptId, 'payment_method_missing', 'No card is saved for this workspace.', 'failed', false);
+  const stop = stopCharge(a);
+  if (stop) return abandonCharge(runtime, cfg, a, stop);
   const key = a.idempotency_key, meta = metadata(cfg, a.workspace_id, { bane_attempt: attemptId }), pm = a.stripe_payment_method;
   const product = a.stripe_credit_product;
   let invoiceId = a.stripe_invoice, addingProductLine = false;
