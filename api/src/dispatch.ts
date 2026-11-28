@@ -4,14 +4,12 @@ import { sendingConnections } from './domain-claims.js';
 import { processJobs, wakeWebhooks } from './jobs.js';
 import type { GateState } from './dispatcher.js';
 import { finishCampaigns, terminalColumns, terminalEvents } from './states.js';
+import { isDeletableUploadKey } from './storage-keys.js';
 const loadDispatcher = lazyModule(() => import('./dispatcher.js'));
-const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** The only keys this job deletes: an attachment's or template asset's, by exact grammar, in the job's workspace. */
-const deletable = (wid: string, key: string) => !wid.includes('/') && new RegExp(`^(?:uploads/${escaped(wid)}/attachment_|${escaped(wid)}/(?:live/)?attachments/attachment_|${escaped(wid)}/templates/assets/tasset_)[A-Za-z0-9]+$`).test(key);
 export const deleteAttachment: JobHandler = async (runtime, payload, job) => {
   if (typeof payload.key !== 'string') throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Attachment deletion job is missing its object key.');
   const key = payload.key;
-  if (!deletable(job.workspaceId, key)) throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Attachment deletion key is outside the job scope.');
+  if (!isDeletableUploadKey(job.workspaceId, key)) throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Attachment deletion key is outside the job scope.');
   // Recheck when deleting, not when queuing, and never from the key alone: no row may reference this exact
   // key (storage_key_in_use, 158). A new reference needs the reservation or asset row this check also sees,
   // so none can appear before the delete below, in the same transaction.

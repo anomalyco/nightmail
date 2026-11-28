@@ -48640,6 +48640,23 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('template assets: publishing one leaves no upload tombstone, and deleting one queues its object for the deletion job',async t=>{
+    await simulatedSesFixture(t,async({runtime,local,db})=>{
+      const dispatch=await import('./src/dispatch.js'),wid=runtime.config.workspaceId,objects=new Map<string,Uint8Array>();
+      runtime.storage={put:async(key:string,body:Uint8Array)=>{objects.set(key,body);},get:async(key:string)=>objects.has(key)?{body:objects.get(key)!,contentType:'image/png'}:null,delete:async(key:string)=>{objects.delete(key);}};
+      const asset=ok(await local('POST','/v1/template-assets',{filename:'logo.png',contentType:'image/png',content:Buffer.from('fixture-image').toString('base64')}),201);
+      const key=`${wid}/templates/assets/${asset.id}`;
+      assert.ok(objects.has(key));
+      assert.equal((await db.query('SELECT FROM sending_upload_tombstones WHERE id=$1',[asset.id])).rowCount,0,'the published asset leaves no tombstone');
+      ok(await local('DELETE',`/v1/template-assets/${asset.id}`));
+      assert.ok(objects.has(key),'the object is deleted by the job, outside the request transaction');
+      const jobs=(await db.query("SELECT id FROM jobs WHERE workspace_id=$1 AND type='maintenance.deleteAttachment' AND payload->>'key'=$2",[wid,key])).rows;
+      assert.equal(jobs.length,1);
+      await dispatch.deleteAttachment(runtime,{key},{id:jobs[0].id,attempts:1,workspaceId:wid});
+      assert.equal(objects.has(key),false);
+    });
+  });
+
   test('attachment downloads: an unread response is ended and its file let go before its memory returns to the budget',async t=>{
     await simulatedSesFixture(t,async({runtime,local,fetch})=>{
       const [{attachmentDownload},{memoryInUse,sendReservation,withMemory}]=await Promise.all([import('./src/sending.js'),import('./src/isolate-memory.js')]);
