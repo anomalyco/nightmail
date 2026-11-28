@@ -83,6 +83,8 @@ async function post(origin: string, path: string, body: unknown): Promise<Starte
   if (!response.ok || !data?.socketUrl) throw new StartError(response.status, data?.error?.code ?? 'UNAVAILABLE', data?.error?.retryAfter)
   return data
 }
+/** How many conversations one open() tries before it gives up for now (each a stale one /chat/resume refused). */
+const OPEN_TRIES = 4
 const currentConversation = async (): Promise<CurrentSupportConversation | null> => {
   try { return (await supportApi.current()).conversation }
   catch (error) { throw error instanceof ApiError && error.code !== 'NETWORK_UNAVAILABLE' ? new StartError(error.status ?? 400, error.code) : new StartError(0, 'NETWORK') }
@@ -145,13 +147,16 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
 
   // Look up the workspace's open conversation from Nightmail (when none is cached locally), resume it if one exists,
   // or start one only when `wantCreate` is true (the person sent a message, attached a screenshot or asked for a person).
+  // A conversation /chat/resume refused is never tried again in this open(), even when Nightmail still lists it as the
+  // open one: it starts fresh instead (or stays ready), and a few tries in all bound the loop.
   async function open(): Promise<Started | null> {
     let conversationId = load(key)?.conversationId ?? null
+    const refused = new Set<string>()
     for (let tries = 0; ; tries++) {
       try {
         if (!conversationId) {
           const found = await currentConversation()
-          conversationId = found?.id ?? null
+          conversationId = found?.id && !refused.has(found.id) ? found.id : null
           if (!conversationId && !wantCreate) return null
         }
         const token = await nextHandoff()
@@ -164,10 +169,11 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
         if (!(error instanceof StartError)) throw error
         // Stale or closed conversation, or an email conversation: forget it, then stay ready or start fresh if sending.
         if (conversationId && (error.status === 404 || error.code === 'EMAIL_CONVERSATION')) {
+          refused.add(conversationId)
           save(key, null)
           conversationId = null
           if (!wantCreate) return null
-          continue
+          if (tries < OPEN_TRIES) continue
         }
         if (error.code === 'HANDOFF_INVALID' || error.code === 'HANDOFF_USED') unspent = null
         if (tries === 0 && (error.code === 'HANDOFF_INVALID' || error.code === 'HANDOFF_USED')) continue

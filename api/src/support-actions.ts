@@ -429,7 +429,8 @@ export function registerSupportActions(app: App) {
         WHERE conversation_id = ${conversation.id} AND proposed_by = 'agent' AND state = 'proposed' AND expires_at > now()`);
       if (!open?.same && kind === 'grant_credit' && open?.credit) throw new ApiError(409, 'SUPPORT_CREDIT_PROPOSAL_OPEN', `This conversation already has a credit proposal waiting for staff: one at a time, and at most ${'$'}${CREDIT_CAP_CENTS / 100} each. More is for a person: file a ticket.`);
       if (!open?.same && open!.n >= OPEN_PROPOSALS) throw new ApiError(409, 'SUPPORT_PROPOSALS_OPEN', `This conversation already has ${OPEN_PROPOSALS} proposals waiting for staff.`);
-      const approval = await proposeApproval(tx, { conversationId: conversation.id, kind, reason, proposedBy: 'agent', payload });
+      // The same window as the count above: the open one it saw is the one answered, to its last minute.
+      const approval = await proposeApproval(tx, { conversationId: conversation.id, kind, reason, proposedBy: 'agent', payload, minRemainingSeconds: 0 });
       if (approval.created) {
         // It needs a person now: a ticket (if none is open) puts it in Needs you, and the staff email carries the approval.
         await (await wrapModuleLoad(() => import('./support-staff-mail.js'))).openStaffTicket(tx, conversation.id, 'P3', true);

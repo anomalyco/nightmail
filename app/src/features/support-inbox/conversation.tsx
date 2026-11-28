@@ -172,11 +172,13 @@ const Mark = ({ name, agent }: { name: string; agent: boolean }) => <span classN
  *  conversation; its records (a choice they made, an email it won't answer yet, an agent report's provenance) are
  *  Activity. */
 const toCustomer = (m: SupportMessage) => m.author === 'system' && (m.kind === 'notice' || m.kind === 'waiting')
+/** The agent filed again on a conversation that has its ticket (support/src/conversation.ts): a note in the thread, from the AI. */
+const ticketNote = (m: SupportMessage) => m.author === 'system' && m.kind === 'ticket_note'
 function describe(m: SupportMessage, c: SupportConversation) {
-  const note = m.kind === 'note' && (m.author === 'staff' || m.author === 'agent')
+  const note = (m.kind === 'note' && (m.author === 'staff' || m.author === 'agent')) || ticketNote(m)
   // An agent's report that asks something (verification agent, api/src/feedback-triage.ts): its first message is the agent's words, not the person's.
   const author = m.author === 'customer' && m.kind === 'agent_report' ? 'Their agent' : m.author === 'customer' ? c.customer?.name ?? m.email?.from.name ?? (c.channel === 'agent_feedback' ? 'Agent’s report' : 'Customer')
-    : m.author === 'agent' ? note ? 'Triage agent' : 'Nightmail AI' : m.author === 'system' ? productName : m.staff?.name ?? m.emailFrom ?? 'Staff'
+    : m.author === 'agent' ? note ? 'Triage agent' : 'Nightmail AI' : ticketNote(m) ? 'Nightmail AI' : m.author === 'system' ? productName : m.staff?.name ?? m.emailFrom ?? 'Staff'
   const role: Role = note ? 'note' : held(m) ? 'draft' : m.author === 'customer' ? 'customer' : m.author === 'staff' ? 'staff' : 'agent'
   return { author, role }
 }
@@ -197,7 +199,7 @@ function chatRows(detail: SupportDetail): ChatRow[] {
   const c = detail.conversation
   const entries = [
     ...waitingProposals(detail.events).map((event, order) => ({ key: event.id, at: event.at, event, message: undefined, rank: 0, order })),
-    ...detail.messages.filter(m => m.author !== 'system' || toCustomer(m)).map(message => ({ key: message.id, at: message.at, event: undefined, message, rank: 1, order: message.seq })),
+    ...detail.messages.filter(m => m.author !== 'system' || toCustomer(m) || ticketNote(m)).map(message => ({ key: message.id, at: message.at, event: undefined, message, rank: 1, order: message.seq })),
   ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.rank - b.rank || a.order - b.order)
   const days = new Set(entries.map(entry => day(entry.at))).size > 1, rows: ChatRow[] = []
   let lastDay = '', previous: ChatMessage | null = null
@@ -218,7 +220,7 @@ function activityOf(detail: SupportDetail) {
   return [
     ...detail.events.map(event => ({ key: event.id, at: event.at, text: eventText(event, detail.conversation), ok: undefined as boolean | undefined })),
     ...detail.messages.flatMap(m => m.tools.map((tool, index) => ({ key: `${m.id}:${index}`, at: m.at, text: tool.label, ok: tool.ok }))),
-    ...detail.messages.filter(m => m.author === 'system' && !toCustomer(m)).map(m => ({ key: m.id, at: m.at, text: m.text, ok: undefined })),
+    ...detail.messages.filter(m => m.author === 'system' && !toCustomer(m) && !ticketNote(m)).map(m => ({ key: m.id, at: m.at, text: m.text, ok: undefined })),
   ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
 }
 

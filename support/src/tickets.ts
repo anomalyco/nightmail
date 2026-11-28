@@ -64,23 +64,25 @@ export const masked = (email: string | null) => {
   return `${local.slice(0, 1)}…@${domain}`;
 };
 
+/** A later filing kept with a ticket's row (its `notes`, the last 20): its facts and what they asked, bounded as the row's own. */
+const noteOf = (input: TicketInput, now: number) => ({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), ask: input.ask.slice(0, 600),
+  recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
+const withNote = (notes: string, input: TicketInput, now: number) => JSON.stringify([...JSON.parse(notes) as unknown[], noteOf(input, now)].slice(-20));
+
 /** A fact added to an existing ticket (one per conversation keeps the last 20). False: no such ticket. */
 export async function addTicketNote(env: Env, ticketId: string, input: TicketInput, now = Date.now()) {
   const row = await env.DB.prepare('SELECT notes FROM tickets WHERE id = ?').bind(ticketId).first<{ notes: string }>();
   if (!row) return false;
-  const notes = JSON.parse(row.notes) as unknown[];
-  notes.push({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
-  await env.DB.prepare('UPDATE tickets SET notes = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes.slice(-20)), now, ticketId).run();
+  await env.DB.prepare('UPDATE tickets SET notes = ?, updated_at = ? WHERE id = ?').bind(withNote(row.notes, input, now), now, ticketId).run();
   return true;
 }
 
 export async function fileTicket(env: Env, ctx: TicketContext, input: TicketInput, now = Date.now(), ticketId?: string): Promise<FiledTicket> {
   const existing = await env.DB.prepare('SELECT id, due_at, notes FROM tickets WHERE conversation_id = ?').bind(ctx.conversationId).first<{ id: string; due_at: number; notes: string }>();
   if (existing) {
-    // One ticket per conversation: later facts are appended.
-    const notes = JSON.parse(existing.notes) as unknown[];
-    notes.push({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
-    await env.DB.prepare('UPDATE tickets SET notes = ?, attachments = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes.slice(-20)), JSON.stringify(ctx.attachments.map(a => a.id)), now, existing.id).run();
+    // One ticket per conversation: later facts are appended (the staff inbox hears of them from the conversation, which
+    // mirrors a ticket note: harnessTicket).
+    await env.DB.prepare('UPDATE tickets SET notes = ?, attachments = ?, updated_at = ? WHERE id = ?').bind(withNote(existing.notes, input, now), JSON.stringify(ctx.attachments.map(a => a.id)), now, existing.id).run();
     return { id: existing.id, created: false, dueAt: existing.due_at, replyTo: masked(ctx.customer.email) };
   }
   const id = ticketId ?? newId('tkt'), due = dueAt(input.details.topic, input.severity, now);

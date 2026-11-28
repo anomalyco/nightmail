@@ -212,12 +212,16 @@ export const approvalLink = (config: Pick<Config, 'publicUrl' | 'authSecret'>, a
   `${new URL(config.publicUrl).origin}/support/${a.conversationId}?approval=${a.id}&token=${approvalToken(config.authSecret, a)}`;
 
 /**
- * Proposes an action on a conversation, or answers the one of the same kind already waiting there (unexpired), so a
- * repeated proposal never stacks. The caller holds the conversation's transaction.
+ * Proposes an action on a conversation, or answers the one of the same kind already waiting there, so a repeated
+ * proposal never stacks. `minRemainingSeconds`: how long the waiting one must still have to count (a new email's link
+ * wants an hour, the default); the agent's proposals pass 0, so the one waiting is the one its open-proposal checks
+ * (support-actions.ts) counted, and no second one is made beside it in its last hour. The caller holds the
+ * conversation's transaction.
  */
-export async function propose(tx: DbExecutor, p: { conversationId: string; kind: KindName; reason: string; proposedBy: 'nightmail' | 'agent'; payload?: Record<string, unknown> }) {
+export async function propose(tx: DbExecutor, p: { conversationId: string; kind: KindName; reason: string; proposedBy: 'nightmail' | 'agent'; payload?: Record<string, unknown>; minRemainingSeconds?: number }) {
   const { rows: [open] } = await tx.execute<{ id: string; expires_ms: number }>(sql`SELECT id, ${EXPIRES_MS} FROM support_approvals
-    WHERE conversation_id = ${p.conversationId} AND kind = ${p.kind} AND payload = ${JSON.stringify(p.payload ?? {})}::jsonb AND state = 'proposed' AND expires_at > now() + interval '1 hour' ORDER BY created_at DESC LIMIT 1`);
+    WHERE conversation_id = ${p.conversationId} AND kind = ${p.kind} AND payload = ${JSON.stringify(p.payload ?? {})}::jsonb AND state = 'proposed'
+      AND expires_at > now() + make_interval(secs => ${p.minRemainingSeconds ?? 3600}) ORDER BY created_at DESC LIMIT 1`);
   if (open) return { id: open.id, conversationId: p.conversationId, expiresAt: new Date(Number(open.expires_ms)), created: false };
   const { rows: [made] } = await tx.execute<{ id: string; expires_ms: number }>(sql`INSERT INTO support_approvals(id, conversation_id, kind, payload, proposed_by, reason, expires_at)
     VALUES (${approvalId()}, ${p.conversationId}, ${p.kind}, ${JSON.stringify(p.payload ?? {})}::jsonb, ${p.proposedBy}, ${p.reason.slice(0, 400)}, date_trunc('milliseconds', now() + make_interval(hours => ${APPROVAL_HOURS})))
