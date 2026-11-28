@@ -210,7 +210,7 @@ export function registerSupportDeliverability(app: App, meta: SupportMeta, Works
     stats: { counts: stats?.counts, totals: stats?.totals, rates: stats?.rates } as z.infer<typeof Stats>,
   });
   const statsOf = async (db: DbExecutor, wid: string, rows: Row[]) => {
-    const { campaignStats } = await import('./sending.js');
+    const { campaignStats } = await import('./campaigns/stats.js');
     const full = await db.select().from((await import('./db/sending.js')).campaigns).where(sql`workspace_id = ${wid} AND id = ANY(${ids(rows.map(r => r.id))})`);
     return campaignStats(db, { workspaceId: wid }, full);
   };

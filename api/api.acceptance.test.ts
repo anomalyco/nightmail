@@ -1115,7 +1115,7 @@ test('health: direct mail due and waiting warns at five minutes and pages at thi
   assert.deepEqual(tick({ due: 0, oldestSeconds: 0 }).rollup.directMail, { due: 0, oldestSeconds: 0, behind: false });
 });
 test('verified attachments: the isolate cache is part of the memory budget and gives way to a reservation', async () => {
-  const { verifiedAttachment } = await import('./src/sending.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
+  const { verifiedAttachment } = await import('./src/sending/mime.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
   const body = new Uint8Array(8 * 1024 * 1024).fill(7), checksum = createHash('sha256').update(body).digest('hex');
   let reads = 0;
   const runtime = { storage: { cacheScope: {}, async get() { reads++; return { body, contentType: 'application/octet-stream' }; } } } as never;
@@ -1133,7 +1133,7 @@ test('verified attachments: the isolate cache is part of the memory budget and g
   assert.equal(reads, 2, 'The reservation dropped the idle cached file, so it is read again.');
 });
 test('campaign health: a campaign\'s tallies count accepted, bounced and complained mail as its emails do', async t => {
-  const db = await fixtureDatabase(t), { drizzle } = await import('drizzle-orm/node-postgres'), { campaignOutcomes } = await import('./src/sending.js');
+  const db = await fixtureDatabase(t), { drizzle } = await import('drizzle-orm/node-postgres'), { campaignOutcomes } = await import('./src/campaigns/stats.js');
   const wid = unique('health-tallies'), campaign = unique('cmp');
   await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [wid]);
   cleanup(t, async () => { await db.query('DELETE FROM sending_emails WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM sending_campaign_tallies WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM workspaces WHERE id=$1', [wid]); });
@@ -5887,7 +5887,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
       assert.deepEqual({ state: untouched.state, review: (await pool.query('SELECT review_id FROM sending_campaigns WHERE id=$1', [ownerCampaign.id])).rows[0].review_id }, { state: 'scheduled', review: ownerReview }, 'The owner\'s schedule and frozen audience stay.');
       const contact = ok(await local('POST', '/v1/contacts', { email: address() }, guest), 201);
       error(await local('GET', `/v1/contacts/${contact.id}`, undefined, b.cookie), 404);
-      const { originAllowed } = await import('./src/sending.js');
+      const { originAllowed } = await import('./src/sending/events.js');
       const queued = { workspaceId: a.org.id, actorKeyId: `user_${me.id}`, snapshot: { from: 'sender@example.com' } };
       assert.equal(await originAllowed(runtime, runtime.db, queued), true);
       assert.equal(await originAllowed(runtime, runtime.db, { ...queued, campaignId: 'campaign' }), false);
@@ -9074,7 +9074,7 @@ describe('Hosted MCP OAuth and tools', () => {
 
   test('R2: disabled OAuth client cancels queued sends from descendant keys, not independent keys',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,request,run})=>{
-      const {originAllowed}=await import('./src/sending.js');
+      const {originAllowed}=await import('./src/sending/events.js');
       const {token,consentId,clientId}=await oauthGrant(t,db,writableScope,request);
       const parent=ok(await request('POST','/mcp?codemode=true',token,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'createApiKey',arguments:{confirm:true,body:{name:'R2 parent',permissions:['manage']}}}},rpcHeaders)).result.structuredContent;
       const child=ok(await request('POST','/v1/api-keys',parent.secret,{name:'R2 child',permissions:['send']}),201);
@@ -15134,7 +15134,7 @@ describe('Lists, compound segments, imports and exports', () => {
     for (let i = 0; i < n; i++) { const row = await resource(t, key.secret, '/v1/contacts', { email: address() }); if (state) ok(await consent(key.secret, row.id, state)); rows.push(row); }
     return rows;
   };
-  // The suppression SES feedback writes for one address (ses/feedback.ts and sending.ts share mergeSuppression), and its lift (scripts/lift-suppression.ts).
+  // The suppression SES feedback writes for one address (ses/feedback.ts and sending/events.ts share mergeSuppression), and its lift (scripts/lift-suppression.ts).
   const suppress = async (db: pg.Client, wid: string, email: string) => {
     const [{ drizzle }, { sql }, { mergeSuppression }] = await Promise.all([import('drizzle-orm/node-postgres'), import('drizzle-orm'), import('./src/db/audience.js')]);
     await drizzle(db).execute(sql`INSERT INTO audience_contacts AS c(id,workspace_id,email,suppressed,suppression_reason,suppressed_at) VALUES (${unique('con')},${wid},${email},true,'hard_bounce',now())
@@ -15761,7 +15761,7 @@ describe('Newsletters', () => {
       assert.equal((await jobs('sending.campaignStats'))[0].status, 'completed', 'A fresh count is not queued again.');
       // Once stale (the refresh interval is lowered to now), a count is queued again only when the job would count again:
       // reads of a quiet workspace queue nothing; a read after a new event for its mail, or new mail, does.
-      const { CAMPAIGN_STATS } = await import('./src/sending.js');
+      const { CAMPAIGN_STATS } = await import('./src/sending/schemas.js');
       const refresh = CAMPAIGN_STATS.readRefreshMs; t.after(() => { CAMPAIGN_STATS.readRefreshMs = refresh; });
       CAMPAIGN_STATS.readRefreshMs = 0;
       const job = async () => (await jobs('sending.campaignStats'))[0];
@@ -16264,7 +16264,7 @@ describe('Import property boundaries', () => {
       await db.query(`INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM audience_contacts WHERE workspace_id=$1 AND (email LIKE 'early_%' OR email LIKE 'late_%')`, [wid, probeList.id]);
       const { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const probeReviewId = 'rev_probe_' + randomUUID().replaceAll('-', '').slice(0, 12);
-      await snapshotCampaignAudience(runtime.db, { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never, { listId: probeList.id }, probeReviewId, [], false, { leading: (await import('./src/sending.js')).probeSize });
+      await snapshotCampaignAudience(runtime.db, { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never, { listId: probeList.id }, probeReviewId, [], false, { leading: (await import('./src/sending/schemas.js')).probeSize });
       const lateInFirst100 = (await db.query(`SELECT count(*)::int AS n FROM sending_review_recipients WHERE review_id=$1 AND ordinal<=100 AND recipient->>'email' LIKE 'late_%'`, [probeReviewId])).rows[0].n;
       assert.ok(lateInFirst100 >= 50 && lateInFirst100 <= 99, `Expected uniform mix of later UUIDv7 contacts in first 100 (got ${lateInFirst100}).`);
 
@@ -17216,7 +17216,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
 
   test('a scheduled send is released once: a crash before its commit, racing releases and a retried job send it once', async t => {
     if (!fixtureWorker) return t.skip('requires the isolated loopback job runner');
-    const [{ jobHandlers }, { PgDialect }] = await Promise.all([import('./src/sending.js'), import('drizzle-orm/pg-core')]);
+    const [{ jobHandlers }, { PgDialect }] = await Promise.all([import('./src/sending/jobs.js'), import('drizzle-orm/pg-core')]);
     const key = await keyFixture(t);
     const receipt = ok(await http('POST', '/v1/emails/send', key.secret, mail({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })), 202);
     // Its time comes on a simulated clock: only the email's time moves, and its release job still waits an hour, so the
@@ -17251,7 +17251,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // run. Two real connections in a fixed order: the finalizer waits on the lock the real reschedule route holds.
   test('a reschedule that holds the email while a failed last attempt waits for it wins: the old run rejects nothing', async t => {
     if (!fixtureWorker) return t.skip('requires the isolated loopback job runner');
-    const [{ jobHandlers }, { MAX_ATTEMPTS }, { createApp }, { PgDialect }] = await Promise.all([import('./src/sending.js'), import('./src/jobs.js'), import('./src/app.js'), import('drizzle-orm/pg-core')]);
+    const [{ jobHandlers }, { MAX_ATTEMPTS }, { createApp }, { PgDialect }] = await Promise.all([import('./src/sending/jobs.js'), import('./src/jobs.js'), import('./src/app.js'), import('drizzle-orm/pg-core')]);
     const key = await keyFixture(t);
     const receipt = ok(await http('POST', '/v1/emails/send', key.secret, mail({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })), 202);
     // Its time has come (only the email's time moves: its release job waits an hour, so the runner leaves it to this test).
@@ -17302,7 +17302,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // runs drive the real job runner (processJobs) over a session-local jobs table, so no other scenario's job is claimed.
   test('a scheduled send whose release runs out of attempts or leases is rejected and its sender told, never left waiting', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const [{ processJobs, MAX_ATTEMPTS }, { jobHandlers }, { PgDialect }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending.js'), import('drizzle-orm/pg-core'), import('drizzle-orm')]);
+      const [{ processJobs, MAX_ATTEMPTS }, { jobHandlers }, { PgDialect }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending/jobs.js'), import('drizzle-orm/pg-core'), import('drizzle-orm')]);
       const wid = runtime.config.workspaceId;
       const schedule = async () => { const { id } = ok(await local('POST', '/v1/emails/send', mail({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })), 202); await elapse(db, [id], 3_601_000); return id as string; };
       const email = async (id: string) => (await db.query('SELECT status, error_code, provider_id FROM sending_emails WHERE id=$1', [id])).rows[0];
@@ -19540,7 +19540,7 @@ describe('Private attachment assets and campaign revisions', () => {
     cleanup(t, async () => { ok(await http('DELETE', `/v1/attachments/${json.id}`, key.secret), [200, 404]); });
     // The largest message (25 MiB of files and both 512 KiB body parts) fits SES's 40 MB after encoding, and the estimate
     // admission uses is never below the real size.
-    const [{ SESv2Client, SendEmailCommand }, { addSesBodySplice }, { inlineMessage }, { SEND_LIMITS, estimatedMimeBytes }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/ses-body.js'), import('./src/sending.js'), import('./src/send-limits.js')]);
+    const [{ SESv2Client, SendEmailCommand }, { addSesBodySplice }, { inlineMessage }, { SEND_LIMITS, estimatedMimeBytes }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/ses-body.js'), import('./src/sending/mime.js'), import('./src/send-limits.js')]);
     const file = new Uint8Array(max).map((_, i) => (i * 2654435761) >>> 24), html = `<p>${'x'.repeat(512 * 1024 - 7)}</p>`, text = 'y'.repeat(512 * 1024);
     const snapshot = { kind: 'transactional', from: 'sender@example.com', to: ['to@example.com'], cc: [], bcc: [], replyTo: [], subject: 'Largest', html, text, headers: [], attachments: [], region: REGION, tracking: false } as unknown as import('./src/db/sending.js').EmailSnapshot;
     const parts = [{ FileName: 'big.bin', ContentType: 'application/octet-stream', ContentDisposition: 'ATTACHMENT' as const, RawContent: file }, { FileName: 'logo.png', ContentType: 'image/png', ContentDisposition: 'INLINE' as const, ContentId: 'logo', RawContent: new Uint8Array([137, 80, 78, 71]) }];
@@ -20216,7 +20216,7 @@ describe('Dashboard API capabilities', () => {
     // Synthetic audit rows only: no live send, AWS call or dispatch job. Old creation times
     // prove stats have no implicit 30-day window. Raw feedback uses the real ingestion helper.
     const { nodeRuntime } = await import('./src/adapters/node.js');
-    const { recordEmailEvent } = await import('./src/sending.js');
+    const { recordEmailEvent } = await import('./src/sending/events.js');
     const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL });
     cleanup(t, close);
     const fixtures = [
@@ -20311,7 +20311,7 @@ describe('Dashboard API capabilities', () => {
     for (const fromName of ['Acme Billing', 'Élodie 日本語', 'Acme 👩‍💻 Team', 'O\u2019Brien & Sons', 'Ärzte – Praxis', 'شركة أكمي\u200F Acme', 'Heart ❤\uFE0F Co', 'Team 1\uFE0F\u20E3', 'さくら Sakura', 'ᐃᓄᒃᑎᑐᑦ ᐸᐳ', '《新闻周刊》编辑部', 'Αθήνα \u24B7 Brand'])
       ok(await http('POST', '/v1/emails/send', key.secret, mail({ fromName })), 202);
     // Dispatch applies the same policy to names that were queued before it existed: the bare address is sent instead.
-    const { formattedSender } = await import('./src/sending.js');
+    const { formattedSender } = await import('./src/sending/mime.js');
     assert.equal(formattedSender('sender@example.com', 'billing\uFF20example.com'), 'sender@example.com');
     assert.equal(formattedSender('sender@example.com', 'security\u24D0paypal.com'), 'sender@example.com');
     assert.equal(formattedSender('sender@example.com', 'securitya\u20DDpaypal.com'), 'sender@example.com');
@@ -23873,7 +23873,7 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
   });
 
   test('a campaign’s own unsubscribe page changes only the footer link: List-Unsubscribe keeps its one HTTPS one-click address', async () => {
-    const { screenedAs, withUnsubscribe } = await import('./src/sending.js');
+    const { screenedAs, withUnsubscribe } = await import('./src/campaigns/materialize.js');
     const runtime = { config: { publicUrl: 'https://mail.example' } } as unknown as import('./src/core/types.js').Runtime;
     const token = `u_${'ab'.repeat(32)}`, url = `https://mail.example/unsubscribe/${token}`, own = 'https://brand.example/prefs?list=news#top';
     const customer = { testCampaignId: null, from: 'news@brand.example', to: ['ana@example.net'], cc: [], bcc: [], replyTo: [], region: REGION, kind: 'marketing' as const,
@@ -24676,7 +24676,7 @@ describe('Campaign postal address', () => {
         assert.ok(copy.text.endsWith(`\n\nUnsubscribe: ${url}\n${address}`), 'So does the text.');
       }
       // The copy as dispatched (rebuilt by the same footer) keeps the one-click headers on the recipient's own link.
-      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/sending.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
+      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/campaigns/materialize.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
       const unsubscribeHeaders = (snapshot: { headers: { Name: string; Value: string }[]; text?: string }) => {
         const url = snapshot.text?.match(/\n\nUnsubscribe: (\S+)/)?.[1];
         assert.ok(url?.includes('/unsubscribe/u_'));
@@ -24863,7 +24863,7 @@ describe('Required notices', () => {
       assert.deepEqual(await outcome(notice.id), { [email.subscribed]: 'sent', [email.unsubscribed]: 'sent', [email.unknown]: 'suppressed', [email.later]: 'sent' });
       assert.deepEqual(await outcome(marketing.id), { [email.subscribed]: 'sent', [email.later]: 'suppressed' });
       // The notice's emails: the postal address and no unsubscribe link, header or token.
-      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/sending.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
+      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/campaigns/materialize.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
       for (const row of (await released(notice.id)).filter(row => row.email !== email.unknown)) {
         const content = ok(await local('GET', `/v1/emails/${row.id}/content`));
         assert.ok(!/unsubscribe/i.test(content.html) && !/unsubscribe/i.test(content.text) && content.text.includes('sales tax applies to your plan.') && content.text.endsWith(`\n\n${FIXTURE_POSTAL_ADDRESS}`), 'The notice as delivered.');
@@ -26048,7 +26048,7 @@ async function simulatedSesFixture(t: TestContext, scenario: (fixture: {
 }) => Promise<void>) {
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(new URL(FIXTURE_DATABASE_URL!).hostname), 'Simulated SES fixtures require an isolated local database.');
   const [{ createApp }, { nodeRuntime }, { drizzle }, { jobHandlers }, { operationJobs }, { ensureRegionSettings }, { dispatchDue }, { JobDeferred }, { newsletterJobs }] = await Promise.all([
-    import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/sending.js'),
+    import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/sending/jobs.js'),
     import('./src/webhooks/operations.js'), import('./src/ses-region-state.js'), import('./src/dispatcher.js'), import('./src/jobs.js'), import('./src/newsletters.js'),
   ]);
   const db = await fixtureDatabase(t);
@@ -26872,7 +26872,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('mail room holds pre-deploy verdictless rows for screenHeldMail; sweep retries on outage, sends clean rows and rejects spam with email.rejected webhook; refused suppression frees idempotency key', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => t.test('synthetic transports', async t => {
       const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
-      const { screenHeldMail } = await import('./src/sending.js');
+      const { screenHeldMail } = await import('./src/sending/held-screen.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const wid = runtime.config.workspaceId, acct = '112223330006', origin = 'https://screen.synthetic.invalid', topic = `arn:aws:sns:${REGION}:${acct}:fixture`;
       const key = ok(await local('POST', '/v1/api-keys', { name: 'held-sweep', permissions: ['send', 'read'] }), 201);
@@ -27056,7 +27056,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('a lease the marketing allowance cannot afford ends the run as a quota hold in a bounded number of statements', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const { runDispatcher } = await import('./src/dispatcher.js');
-      const { sesDailyReserve } = await import('./src/sending.js');
+      const { sesDailyReserve } = await import('./src/sending/schemas.js');
       const region = 'te-allowance-1', w = runtime.config.workspaceId, percent = runtime.config.dispatch.dailyHeadroomPercent;
       // 24 owners (one lease's worth), each with one two-recipient marketing envelope.
       const owners = Array.from({ length: 24 }, (_, i) => `${w}-o${String(i).padStart(2, '0')}`), later = `${w}-o24`;
@@ -27125,7 +27125,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('the allowance skips specific unaffordable envelopes: one owner\'s full page holds, and mail behind oversized heads sends', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
-      const { sesDailyReserve } = await import('./src/sending.js');
+      const { sesDailyReserve } = await import('./src/sending/schemas.js');
       const w = runtime.config.workspaceId, percent = runtime.config.dispatch.dailyHeadroomPercent, max = 100;
       const template = ok(await local('POST', '/v1/emails/send', mail()), 202).id, contacts = [address(), address()];
       // Owners with their own send key and two subscribed contacts; each owner's envelopes are
@@ -30937,7 +30937,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // the page are lowered here so 30 emails make a large campaign of five pages.
   test('campaign stats: a large campaign is counted in bounded steps, read from that count, exact once finished and kept after its emails go',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run,jobs})=>{
-      const {CAMPAIGN_STATS,campaignStats}=await import('./src/sending.js'),{campaigns}=await import('./src/db/sending.js'),{eq}=await import('drizzle-orm');
+      const {CAMPAIGN_STATS} = await import('./src/sending/schemas.js'), {campaignStats} = await import('./src/campaigns/stats.js'),{campaigns}=await import('./src/db/sending.js'),{eq}=await import('drizzle-orm');
       const lowered={...CAMPAIGN_STATS};t.after(()=>{Object.assign(CAMPAIGN_STATS,lowered);});
       Object.assign(CAMPAIGN_STATS,{from:10,page:7,runMs:0});
       const wid=runtime.config.workspaceId,review=unique('review'),c=ok(await local('POST','/v1/campaigns',{name:'Large'}),201),path=`/v1/campaigns/${c.id}/stats`;
@@ -31017,7 +31017,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // fake clock lets each page statement take a chosen time.
   test('campaign stats: the background count waits 32 times as long as each run took, so slow steps make it count less often',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run,jobs})=>{
-      const {CAMPAIGN_STATS}=await import('./src/sending.js');
+      const {CAMPAIGN_STATS}=await import('./src/sending/schemas.js');
       const lowered={...CAMPAIGN_STATS};t.after(()=>{Object.assign(CAMPAIGN_STATS,lowered);});
       Object.assign(CAMPAIGN_STATS,{from:10,page:10});
       const wid=runtime.config.workspaceId,review=unique('review'),c=ok(await local('POST','/v1/campaigns',{name:'Paced'}),201);
@@ -31762,7 +31762,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('MX: a list\'s counts follow a bounce on either feedback path, an operator\'s lift and a footer opt-out', async t => {
     // The writers of a contact's suppression and consent that no dashboard request reaches: the SES feedback batch
-    // (sending.ts), the feedback job (ses/feedback.ts), scripts/lift-suppression.ts and recordUnsubscribe.
+    // (sending/events.ts), the feedback job (ses/feedback.ts), scripts/lift-suppression.ts and recordUnsubscribe.
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const [{ ingestFeedbackBatch }, { operationJobs }, { liftSuppression }, { recordUnsubscribe }] = await Promise.all([import('./src/ses/feedback.js'), import('./src/webhooks/operations.js'), import('./scripts/lift-suppression.js'), import('./src/audience/consent.js')]);
       const wid = runtime.config.workspaceId, account = '111122223333', topicArn = `arn:aws:sns:${REGION}:${account}:fixture`;
@@ -31888,7 +31888,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     // tear witnesses (api/tear/ses): accept e2, q d2, old q v2; accept e2, q v2, old q d2.
     await simulatedSesFixture(t,async ({runtime,local,db})=>{
       const {ingestFeedbackBatch} = await import('./src/ses/feedback.js'), {operationJobs} = await import('./src/webhooks/operations.js');
-      const {rank}=await import('./src/sending.js');
+      const {rank}=await import('./src/sending/events.js');
       // The table a Worker deployed before migration 153 embeds; its statements are otherwise the same.
       const current={...rank}, old={scheduled:0,queued:0,attempting:1,acceptance_unknown:2,accepted:3,sent:4,delayed:4,suppressed:6,delivered:5,bounced:6,complained:7,rejected:6,rendering_failed:6,canceled:6,simulated:6};
       const asOld=async<T>(work:()=>Promise<T>)=>{Object.assign(rank,old);try{return await work();}finally{Object.assign(rank,current);}};
@@ -33137,7 +33137,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('Hosted content policy: accept, held mail and campaign copies share one rule; a built-in domain is never trusted; raw and sealed mail need the trusted tier',async()=>{
-    const {resolveHostedContentPolicy:policy,sharedFormatRefusal}=await import('./src/sending.js');
+    const {resolveHostedContentPolicy:policy,sharedFormatRefusal}=await import('./src/sending/mime.js');
     const config={hostedScreen:true,trustedPool:true,builtinDomain:'built.invalid'};
     const trusted={shared:true,poolTier:'trusted',legacyNames:false,from:'a@example.com',probation:false,simulated:false,kind:'transactional'} as const,fresh={...trusted,poolTier:'standard'};
     assert.deepEqual(policy(config,trusted),{shared:true,hosted:true,trusted:true,rules:null,screened:true,required:false});
@@ -33817,7 +33817,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(delivered.has(manager!.email), 'Sent to the signed-in user, on the first run.');
       // The verdict is for exactly that email: a changed word, another or a further recipient, a header, HTML, an attachment
       // or a display name gets none, so it goes to the classifier like any other send.
-      const { platformTestEmail, platformTestVerdict } = await import('./src/sending.js');
+      const { platformTestEmail, platformTestVerdict } = await import('./src/sending/front-door.js');
       const me = manager!.email, fixed = platformTestEmail('platform.invalid');
       const exact = { ...fixed, to: [me], cc: [], bcc: [], replyTo: [], region: REGION, kind: 'transactional' as const, attachments: [], headers: [], tracking: false };
       assert.deepEqual(platformTestVerdict(exact, me.toUpperCase(), 'standard'), { status: 'platform', reason: 'platform test email', rules: 'standard' });
@@ -33889,7 +33889,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal((await dispatch()).sent, 0, 'Mail room never dispatches held unscreened row');
       assert.equal((await db.query('SELECT screened FROM sending_emails WHERE id=$1', [heldOutage.id])).rows[0].screened, false);
       fail = false;
-      const { screenHeldMail } = await import('./src/sending.js');
+      const { screenHeldMail } = await import('./src/sending/held-screen.js');
       assert.deepEqual(await screenHeldMail(runtime), { leased: 1, passed: 1, rejected: 0, deferred: 0, remaining: 0 });
       await Promise.all([post('Slow A'), post('Slow B'), post('Slow C'), post('Receipt', 'cached@example.invalid')]);
       assert.equal((await dispatch()).sent, 5);
@@ -33918,7 +33918,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('hosted screen 451/5xx/timeout failover, accept-and-hold on dual outage, bounded sweep scaling and backlog log', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifiers', async t => {
-      const { loadConfig } = await import('./src/config.js'), { screenHeldMail } = await import('./src/sending.js');
+      const { loadConfig } = await import('./src/config.js'), { screenHeldMail } = await import('./src/sending/held-screen.js');
       const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
       const acct = '112223330029', { wid, delivered } = await hostedScreenFixture(t, runtime, db, acct, 'outage-hold.invalid');
       const config = loadConfig({ BANE_ROOT_SECRET: AUTH_SECRET, PUBLIC_URL: PUBLIC_ORIGIN, TYPESAFE_API_KEY: 'fixture',
@@ -34047,7 +34047,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('second classifier: every request the screen makes is repeated after the run and both answers are kept, for an email, a campaign test and campaign copies of several requests; a cached verdict, a retried dispatch and a batch written twice add nothing; nothing runs without its key', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, jobs }) => t.test('classifiers', async t => {
       const [{ shadowSettled, writeComparisons }, { processJobs }, { jobHandlers }, { operationJobs }, { newsletterJobs }, { SESv2Client, GetAccountCommand }] = await Promise.all([import('./src/screen-shadow.js'), import('./src/jobs.js'),
-        import('./src/sending.js'), import('./src/webhooks/operations.js'), import('./src/newsletters.js'), import('@aws-sdk/client-sesv2')]);
+        import('./src/sending/jobs.js'), import('./src/webhooks/operations.js'), import('./src/newsletters.js'), import('@aws-sdk/client-sesv2')]);
       const acct = '112223330021', started = new Date(Date.now() - 1000).toISOString(), { wid } = await hostedScreenFixture(t, runtime, db, acct, 'shadow.invalid');
       // The second classifier flags a copy that greets Ben, which the screen passes, and passes SampleMarker, which the screen flags.
       let jevDown = false;
@@ -34474,7 +34474,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       return specifier === 'cloudflare:workers' ? { shortCircuit: true, url: 'data:text/javascript,export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env}} export class WorkerEntrypoint {constructor(ctx,env){this.ctx=ctx;this.env=env}}' } : next(specifier, context);
     } });
     const worker = (await import('./src/worker.js').finally(() => hook.deregister())).default as unknown as { queue(batch: unknown, env: unknown, ctx?: unknown): Promise<void> };
-    const [{ jobHandlers }, { screenWindow }] = await Promise.all([import('./src/sending.js'), import('./src/screen.js')]);
+    const [{ jobHandlers }, { screenWindow }] = await Promise.all([import('./src/sending/jobs.js'), import('./src/screen.js')]);
     // The Worker's own jobs table, so its drain claims this test's job and nothing else; every other table is the fixture database's.
     const db = new pg.Client({ connectionString: FIXTURE_DATABASE_URL }); await db.connect();
     const wid = unique('jevf-drain-workspace'), schema = `jevf_drain_${randomUUID().replaceAll('-', '').slice(0, 12)}`, type = 'campaign.shadowFixture';
@@ -34522,7 +34522,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('hosted campaign copy keys: the customer copy byte for byte, with only the unsubscribe slots Nightmail generates set for a placeholder', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => t.test('classifier', async t => {
       await hostedScreenFixture(t, runtime, db, '112223330015', 'keyed.invalid');
-      const { copyKey } = await import('./src/screen.js'), { screenedAs, withUnsubscribe, generatedUnsubscribeUrl } = await import('./src/sending.js');
+      const { copyKey } = await import('./src/screen.js'), { screenedAs, withUnsubscribe, generatedUnsubscribeUrl } = await import('./src/campaigns/materialize.js');
       const { createUnsubscribeLink } = await import('./src/audience/unsubscribe.js');
       const generated = async () => (await createUnsubscribeLink(runtime.config.publicUrl, runtime.config.workspaceId, 'a@example.net')).url;
       const customer = (change: Record<string, unknown> = {}) => ({ testCampaignId: null, from: 'news@keyed.invalid', fromName: 'News', to: ['a@example.net'], cc: [], bcc: [], replyTo: ['help@keyed.invalid'],
@@ -36845,7 +36845,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES ($1,$1,$2,'ready','shared',$3,'ready')`, [wid, REGION, pool]);
       await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ($1,$2,$2,'verified')`, [domain, wid]);
       await gradedSender(db, wid, 10000);
-      const { probeSize } = await import('./src/sending.js');
+      const { probeSize } = await import('./src/sending/schemas.js');
       assert.deepEqual([50, 120, 1000, 3000, 10000].map(probeSize), [50, 100, 100, 300, 500]);
       const list = ok(await local('POST', '/v1/lists', { name: unique('probe') }), 201);
       await db.query(`WITH c AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_'||md5($1||n),$1,'reader-'||n||'@example.net','subscribed' FROM generate_series(1,150)n RETURNING id)
@@ -37229,7 +37229,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('campaign order: the list probe is a uniform sample of the whole audience, then the most engaged go first and contacts who joined since the list was last sent to go last; the review counts them', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
-      const wid = runtime.config.workspaceId, { probeSize } = await import('./src/sending.js'), { snapshotCampaignAudience } = await import('./src/audience/counts.js');
+      const wid = runtime.config.workspaceId, { probeSize } = await import('./src/sending/schemas.js'), { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('engaged-order') }), 201);
       // 300 subscribers: 1-30 opened in the last 30 hours (1 most recently), 31-60 last opened 200 days ago, 61-200 on the
       // list when it was last sent to (yesterday), 201-300 joined since, with nothing on record.
@@ -37618,7 +37618,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // fixture cannot prepare a real 20,000-recipient launch in one statement): 20,000 frozen recipients, and an earlier
       // clean, mature campaign that delivered to the 10,000 at odd ordinals (50% coverage), then to all 20,000. Neither
       // exempts them; at 10,000 recipients the same full, mature history does.
-      const { listMailedCleanly } = await import('./src/sending.js');
+      const { listMailedCleanly } = await import('./src/campaigns/stats.js');
       const review = async (total: number) => {
         const id = unique('rev_big');
         await db.query(`INSERT INTO sending_review_recipients(review_id,ordinal,recipient,recipient_bytes) SELECT $1,n,jsonb_build_object('id','con_big_'||n,'email','big-'||n||'@example.net'),64 FROM generate_series(1,$2::int) n`, [id, total]);
@@ -37840,7 +37840,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // build before it did, in other words under the same key (a deploy between the send and the job's end).
       await reset();
       const warned = await change({ kind: 'step', step: 'warn', reasons: reasons('warn') });
-      const { sendSystemEmail } = await import('./src/sending.js');
+      const { sendSystemEmail } = await import('./src/sending/held-screen.js');
       await sendSystemEmail(runtime, platform, { from: 'notices@platform.example', to: [AUTH_EMAIL], subject: 'Nightmail: W is warned', text: 'What happened', idempotencyKey: `standing:${warned!.eventId}`, standingEvent: warned!.eventId });
       const [retried] = (await db.query(`SELECT id,payload FROM jobs WHERE workspace_id=$1 AND type='standing.notify' AND status='pending'`, [wid])).rows;
       for (let i = 0; i < 2; i++) await notifyJob(runtime, retried.payload, { id: retried.id, attempts: i + 1, workspaceId: wid });
@@ -41417,7 +41417,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const bigLaunched = await launch(bigCamp);
     assert.equal(bigLaunched.status, 202, JSON.stringify(bigLaunched.body));
     assert.equal(bigLaunched.body.queued, bigBefore.length);
-    const { jobHandlers } = await import('./src/sending.js');
+    const { jobHandlers } = await import('./src/sending/jobs.js');
     const bigSubId = (await g.query("SELECT c.id FROM audience_contacts c JOIN audience_list_members m ON m.workspace_id=c.workspace_id AND m.contact_id=c.id WHERE c.workspace_id=$1 AND m.list_id=$2 AND c.marketing_consent='subscribed' AND NOT c.suppressed LIMIT 1", [w, bigList])).rows[0].id;
     await gate.query('BEGIN');
     let bgRun: Promise<unknown> | undefined;
@@ -41467,7 +41467,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Also run the deferred background capture under the same stale statistics and verify it freezes the exact set in seconds.
       const capStart = Date.now();
       const { nodeRuntime } = await import('./src/adapters/node.js');
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       const { processJobs } = await import('./src/jobs.js');
       // The background worker uses separate connections for capture and its progress write.
       // Give all of them the same private queue, containing only this campaign's real job.
@@ -41543,7 +41543,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   // Differential proof (L87 item 7) + s1: static content_hash deploy & rollback safety (L87 item 5).
   test('fast campaign launch: URL-attribute shortcut matches per-row parse5 and s1: hashes preserve deploy/rollback safety', async t => {
-    const { analyzeHtmlPlaceholders, staticContentHash, verifyCampaignContentHash } = await import('./src/sending.js');
+    const { analyzeHtmlPlaceholders } = await import('./src/sending/mime.js'), { staticContentHash, verifyCampaignContentHash } = await import('./src/campaigns/materialize.js');
     const { digest } = await import('./src/core/http.js');
     const { canonical } = await import('./src/idempotency.js');
     const { boundedHtmlFragment } = await import('./src/bounded-html.js');
@@ -41639,7 +41639,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // Everyone unsubscribes after the 202 before the background capture runs.
     await g.query("UPDATE audience_contacts SET marketing_consent='unsubscribed' WHERE workspace_id=$1", [w]);
     const { nodeRuntime } = await import('./src/adapters/node.js');
-    const { jobHandlers } = await import('./src/sending.js');
+    const { jobHandlers } = await import('./src/sending/jobs.js');
     const { processJobs } = await import('./src/jobs.js');
     // A shared queue drain can finish without claiming this campaign. Give the worker only the job the launch queued.
     const schema = 'late_empty_' + randomUUID().replaceAll('-', ''), url = new URL(FIXTURE_DATABASE_URL!);
@@ -41924,7 +41924,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // tear witness (5 steps): U1 upload, expire, sweep, purge, U1 ok -> the object outlived its reservation with no deletion queued.
   test('attachment upload: a put that outlasts its swept reservation still queues the object for deletion',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js');
       const wid=runtime.config.workspaceId;let stored='';
       t.mock.method(runtime.storage,'put',async(key:string)=>{
         stored=key;
@@ -41942,7 +41942,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // put whose Worker died after the sweeper's deletion ran left its object with no durable record).
   test('attachment upload: an unpublished object keeps a durable cleanup obligation even if its Worker dies',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js'),{cleanup}=await import('./src/maintenance.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js'),{cleanup}=await import('./src/maintenance.js');
       const wid=runtime.config.workspaceId,puts:{key:string;signal:unknown}[]=[];let landed=false;
       // The first put hangs (its Worker dies before finish and refund); later ones succeed.
       t.mock.method(runtime.storage,'put',(key:string,_b:Uint8Array,_c:string,signal:unknown)=>{puts.push({key,signal});return puts.length===1?new Promise<void>(()=>{landed=true;}):Promise.resolve();});
@@ -41972,7 +41972,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // that landed after its tombstone was spent left an object no record owned).
   test('attachment upload: storage reconciliation deletes any upload object no record has owned for a day',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js'),{reconcileUploads}=await import('./src/maintenance.js'),{r2Storage}=await import('./src/adapters/storage.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js'),{reconcileUploads}=await import('./src/maintenance.js'),{r2Storage}=await import('./src/adapters/storage.js');
       const wid=runtime.config.workspaceId,day=86_400_000,objects=new Map<string,Date>();
       t.mock.method(runtime.storage,'put',async(key:string)=>{objects.set(key,new Date());});
       // The bucket as the hourly reconciliation lists it, two objects a page.
@@ -42020,7 +42020,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('attachment upload: reconciliation and deletion never touch another key family or a referenced key',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js'),{reconcileUploads}=await import('./src/maintenance.js'),dispatch=await import('./src/dispatch.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js'),{reconcileUploads}=await import('./src/maintenance.js'),dispatch=await import('./src/dispatch.js');
       const wid=runtime.config.workspaceId,day=86_400_000,old=()=>new Date(Date.now()-2*day),objects=new Map<string,Date>(),hex=()=>randomUUID().replaceAll('-','');
       t.mock.method(runtime.storage,'put',async(key:string)=>{objects.set(key,new Date());});
       t.mock.method(runtime.storage,'delete',async(key:string)=>{objects.delete(key);});
@@ -46227,7 +46227,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('job scheduling serves every class', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
       const { processJobs, enqueue } = await import('./src/jobs.js');
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       // processJobs drains the whole installation; isolate this queue from the harness runner.
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
       const seen = new Set<string>();
@@ -48415,7 +48415,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const send = feedback.find(job => job.payload.message.eventType === 'Send')!;
       const context = (job: Json) => ({ id: job.id, attempts: 1, workspaceId: runtime.config.workspaceId });
       for (const job of [deliver, deliver, send, send]) await operationJobs['operation.simulatedFeedback']!(runtime, job.payload, context(job));
-      const { recordEmailEvent } = await import('./src/sending.js');
+      const { recordEmailEvent } = await import('./src/sending/events.js');
       assert.equal(await recordEmailEvent(runtime, { workspaceId: runtime.config.workspaceId, emailId: email.id, type: 'delivery', providerId: deliver.payload.message.mail.messageId, externalId: `${deliver.payload.topicArn}:${deliver.payload.messageId}` }), null, 'Replaying the same external event must not fan out again even without the receipt guard.');
       assert.equal(ok(await local('GET', `/v1/emails/${email.id}`)).status, 'delivered', 'Late Send feedback must not regress Delivery.');
       assert.equal(page(await local('GET', `/v1/emails/${email.id}/events`)).filter(event => ['send', 'delivery'].includes(event.type)).length, 2);
@@ -48886,7 +48886,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('campaign images: linked from the host of the message\'s links (PUBLIC_URL here, the link domain on Hosted) instead of attached, the message is its HTML, and a link serves only its own picture, only on a host that serves its workspace', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, fetch, run }) => {
-      const { crc32, deflateSync } = await import('node:zlib'), { inlineMessage } = await import('./src/sending.js');
+      const { crc32, deflateSync } = await import('node:zlib'), { inlineMessage } = await import('./src/sending/mime.js');
       // November's newsletter as it was sent: an editor body and one 272,311-byte PNG shown 100 px wide, under its bane- content ID.
       const chunk = (type: string, data: Buffer) => { const body = Buffer.concat([Buffer.from(type, 'latin1'), data]), out = Buffer.alloc(data.length + 12); out.writeUInt32BE(data.length); body.copy(out, 4); out.writeUInt32BE(crc32(body), data.length + 8); return out; };
       const side = 260, header = Buffer.alloc(13); header.writeUInt32BE(side); header.writeUInt32BE(side, 4); header.set([8, 6, 0, 0, 0], 8);
@@ -49087,7 +49087,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   }
   test('an earlier reschedule wins over a run that already decided to wait for the old time', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, db }) => {
-      const [{ processJobs, JobDeferred }, { jobHandlers }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending.js'), import('drizzle-orm')]);
+      const [{ processJobs, JobDeferred }, { jobHandlers }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending/jobs.js'), import('drizzle-orm')]);
       const campaign = await scheduledCampaign(local, run, 3_600_000), jobId = `campaign.run:${campaign.id}`;
       await runtime.db.execute(sql`CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP`);
       try {
@@ -49116,7 +49116,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('a run that found the old time due cannot start sending after a later reschedule', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, db }) => {
-      const [{ JobDeferred }, { jobHandlers }, { PgDialect }] = await Promise.all([import('./src/jobs.js'), import('./src/sending.js'), import('drizzle-orm/pg-core')]);
+      const [{ JobDeferred }, { jobHandlers }, { PgDialect }] = await Promise.all([import('./src/jobs.js'), import('./src/sending/jobs.js'), import('drizzle-orm/pg-core')]);
       const campaign = await scheduledCampaign(local, run, 3_600_000), jobId = `campaign.run:${campaign.id}`;
       // The send time has come: the run will find it due and move scheduled -> sending.
       await db.query("UPDATE sending_campaigns SET scheduled_at = now() - interval '1 second' WHERE id = $1", [campaign.id]);
@@ -49473,7 +49473,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('unmatched callback retains one deferred recovery and later records delivery exactly once', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
-      const [{ operationJobs }, { recordEmailEvent }] = await Promise.all([import('./src/webhooks/operations.js'), import('./src/sending.js')]);
+      const [{ operationJobs }, { recordEmailEvent }] = await Promise.all([import('./src/webhooks/operations.js'), import('./src/sending/events.js')]);
       const providerId = `sim_${randomUUID()}`;
       const payload = { topicArn: `urn:opensend:simulated-ses:${REGION}`, messageId: unique('early-delivery'), region: REGION,
         message: { eventType: 'Delivery', mail: { messageId: providerId }, delivery: { timestamp: new Date().toISOString() } } };
@@ -49614,7 +49614,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('attachment downloads: an unread response is ended and its file let go before its memory returns to the budget',async t=>{
     await simulatedSesFixture(t,async({runtime,local,fetch})=>{
-      const [{attachmentDownload},{memoryInUse,sendReservation,withMemory}]=await Promise.all([import('./src/sending.js'),import('./src/isolate-memory.js')]);
+      const [{attachmentDownload},{memoryInUse,sendReservation,withMemory}]=await Promise.all([import('./src/sending/mime.js'),import('./src/isolate-memory.js')]);
       const objects=new Map<string,Uint8Array>(),MiB=1024*1024,size=25*MiB,readMs=attachmentDownload.readMs;
       runtime.storage={put:async(key:string,body:Uint8Array)=>{objects.set(key,body);},get:async(key:string)=>objects.has(key)?{body:objects.get(key)!,contentType:'text/plain'}:null,delete:async(key:string)=>{objects.delete(key);}};
       const key=ok(await local('POST','/v1/api-keys',{name:'downloads',permissions:['send','read']}),201).secret as string;secrets.add(key);
@@ -49876,7 +49876,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('query budget: immutable campaign preparation, release, dispatch and storage per recipient',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>{
-      const {jobHandlers}=await import('./src/sending.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/dispatcher.js');
+      const {jobHandlers}=await import('./src/sending/jobs.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/dispatcher.js');
       const ws=runtime.config.workspaceId,n=100,bytes=Buffer.from('fixture'),attachments:string[]=[];
       runtime.feedback={enqueue:async()=>{}};runtime.storage={put:async()=>{},get:async()=>({body:bytes,contentType:'text/plain'}),delete:async()=>{}};
       for(let i=0;i<20;i++)attachments.push(ok(await local('POST','/v1/attachments',{filename:`file${i}.txt`,content:bytes.toString('base64')}),201).id);
@@ -49910,7 +49910,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('launching and completing a campaign is bounded in statements and job rows', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       const { dispatchDue } = await import('./src/dispatcher.js');
       const { JobDeferred } = await import('./src/jobs.js');
       const ws = runtime.config.workspaceId;
@@ -49972,7 +49972,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('a run that exhausts its retries leaves the campaign failed, and a sending campaign with nothing queued is finished by the sweep', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
       const { MAX_ATTEMPTS } = await import('./src/jobs.js');
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       const { dispatchPartitions } = await import('./src/dispatch.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('stuck') }), 201);
       const contact = ok(await local('POST', '/v1/contacts', { email: address() }), 201);
@@ -50155,7 +50155,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('four dispatcher shards on separate connections drain one campaign concurrently without serializing on its row', async t => {
     const db = await fixtureDatabase(t);
     const key = await keyFixture(t);
-    const [{ nodeRuntime }, { jobHandlers }, { runDispatcher }, pg] = await Promise.all([import('./src/adapters/node.js'), import('./src/sending.js'), import('./src/dispatcher.js'), import('pg')]);
+    const [{ nodeRuntime }, { jobHandlers }, { runDispatcher }, pg] = await Promise.all([import('./src/adapters/node.js'), import('./src/sending/jobs.js'), import('./src/dispatcher.js'), import('pg')]);
     const list = await resource(t, key.secret, '/v1/lists', { name: unique('shards') });
     const ws = list.workspaceId, tag = unique('shard');
     const recipients = BENCH ? 2000 : 480; // Five full leases per shard, before the competing runner.
@@ -50278,7 +50278,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('campaign detail counts a large sending campaign once per cache window, keeps delivery current and is exact once done', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, request, run, db }) => {
-      const { CAMPAIGN_PROGRESS_CACHE_SECONDS: window, CAMPAIGN_PROGRESS_CACHE_MIN_RECIPIENTS: total } = await import('./src/sending.js');
+      const { CAMPAIGN_PROGRESS_CACHE_SECONDS: window, CAMPAIGN_PROGRESS_CACHE_MIN_RECIPIENTS: total } = await import('./src/campaigns/views.js');
       const ws = runtime.config.workspaceId, tail = 900;
       const list = ok(await local('POST', '/v1/lists', { name: unique('progress-cache') }), 201);
       await db.query(`INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent)
@@ -50445,7 +50445,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // duplicate delivery_delay, and delivery_delay followed by delivery) via recordEmailEvent and verify tallies
       // match raw sending_email_events semantics (no spurious deliveryDelayed from operation_events's ELSE 129) and
       // reconcile produces 0 drift.
-      const { recordEmailEvent } = await import('./src/sending.js');
+      const { recordEmailEvent } = await import('./src/sending/events.js');
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,campaign_id,review_id,review_ordinal,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,created_at) VALUES
         ('t_seq_bnc',$1,$3,'fixture',$2,$4,5,'n@e.com','["s1@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'bounced','ps1',$5),
         ('t_seq_val',$1,$3,'fixture',$2,$4,6,'n@e.com','["s2@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'sent','ps2',$5),
@@ -50531,7 +50531,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('feedback throughput: priority routing, cross-queue duplicates, concurrent out-of-order safety, exact tallies and priority-only lag hold', async t => {
     const { feedbackSink, isPriorityFeedback, settleFeedbackBatch, feedbackMac, batchFirstDeliveryLag, metricsEffectiveLagMs } = await import('./src/adapters/feedback-queue.js');
-    const { ingestRoutineSesEvents, recordFeedbackLag, FEEDBACK_LAG_HOLD_MS, FEEDBACK_LAG_MIN_DEPTH } = await import('./src/sending.js');
+    const { ingestRoutineSesEvents, recordFeedbackLag, FEEDBACK_LAG_HOLD_MS, FEEDBACK_LAG_MIN_DEPTH } = await import('./src/sending/events.js');
     // B6: retried messages (attempts > 1) and tiny metric backlogs (< FEEDBACK_LAG_MIN_DEPTH) never trigger lag holds.
     const t0 = Date.now();
     assert.equal(batchFirstDeliveryLag([{ attempts: 5, timestamp: new Date(t0 - 450_000) }], t0), null, 'Retry-only batch returns null lag');
@@ -50589,9 +50589,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(sentRows.length, 80);
 
       const topic = `urn:bane:simulated-ses:${REGION}`, nowIso = new Date().toISOString();
-      const events: import('./src/sending.js').RoutineIngress[] = [];
+      const events: import('./src/sending/events.js').RoutineIngress[] = [];
       for (const [i, r] of sentRows.entries()) {
-        const mk = (kind: string, type: string, data: Record<string, unknown>, effects?: import('./src/sending.js').RoutineIngress['effects']): import('./src/sending.js').RoutineIngress => ({
+        const mk = (kind: string, type: string, data: Record<string, unknown>, effects?: import('./src/sending/events.js').RoutineIngress['effects']): import('./src/sending/events.js').RoutineIngress => ({
           workspaceId: ws, type, providerId: r.provider_id, taggedEmailId: r.id, createdAt: nowIso,
           externalId: `${topic}:${r.id}:${kind}`, data: { providerId: r.provider_id, ...data }, ...(effects ? { effects } : {}),
           ingress: { topicArn: topic, messageId: `${r.id}:${kind}`, region: REGION, payload: { message: { eventType: kind, mail: { messageId: r.provider_id } }, topicArn: topic, messageId: `${r.id}:${kind}`, region: REGION }, recoveryType: 'operation.simulatedFeedbackRecovery' },
@@ -50694,7 +50694,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('campaign content hash reader: verifies legacy and s1: hashes, rejects tampering, and pauses without burning recipients on unknown formats', async t => {
-    const { staticContentHash, verifyCampaignContentHash, isSupportedContentHash, sentCampaignContent } = await import('./src/sending.js');
+    const { staticContentHash, verifyCampaignContentHash, isSupportedContentHash, sentCampaignContent } = await import('./src/campaigns/materialize.js');
     const { digest } = await import('./src/core/http.js');
     const { canonical } = await import('./src/idempotency.js');
     assert.deepEqual([
@@ -50787,7 +50787,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('bounded response and load sizes: templates, emails, campaigns, idempotency and MCP', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const ws = runtime.config.workspaceId;
-      const { CAMPAIGN_DEFAULTS_MAX_KEYS, CAMPAIGN_DEFAULTS_MAX_BYTES, EMAIL_LIST_MAX_BYTES } = await import('./src/sending.js');
+      const { CAMPAIGN_DEFAULTS_MAX_KEYS, CAMPAIGN_DEFAULTS_MAX_BYTES, EMAIL_LIST_MAX_BYTES } = await import('./src/sending/schemas.js');
       const { MAX_IDEMPOTENT_RESULT_BYTES } = await import('./src/idempotency.js');
 
       // 1. Template list projects summary columns in SQL without loading draft/published HTML.
@@ -51429,7 +51429,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await dispatchDue(runtime, REGION);
       assert.deepEqual(sent.sort(), [clean, unscreened].sort(), 'Mail room never sends outage-held rows before screening.');
       classifierDown = false;
-      const { screenHeldMail } = await import('./src/sending.js');
+      const { screenHeldMail } = await import('./src/sending/held-screen.js');
       assert.deepEqual(await screenHeldMail(runtime), { leased: 2, passed: 1, rejected: 1, deferred: 0, remaining: 0 });
       await dispatchDue(runtime, REGION);
       assert.equal((await get(heldSpamId)).status, 'rejected');
@@ -52064,12 +52064,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
             console.warn = (...args) => { warnLogs.push(String(args[0])); };
             console.error = (...args) => { errorLogs.push(String(args[0])); };
             try {
-              // Fail 7 consecutive times at attempts=5 (claimed as attempt 6 = ceiling): 1 pre-handler sending.js failure + 6 in-handler parse5 failures.
+              // Fail 7 consecutive times at attempts=5 (claimed as attempt 6 = ceiling): 1 pre-handler sending/jobs.js failure + 6 in-handler parse5 failures.
               for (let i = 1; i <= 7; i++) {
                 await client.query('UPDATE jobs SET available_at = now() WHERE id = $1', [jobId]);
                 let failOnce = true;
                 faultResolver = (specifier) => {
-                  if (failOnce && (i === 1 ? specifier.endsWith('/sending.js') : specifier === 'parse5')) {
+                  if (failOnce && (i === 1 ? specifier.endsWith('/sending/jobs.js') : specifier === 'parse5')) {
                     failOnce = false;
                     throw new Error('synthetic load failure #' + i);
                   }
@@ -52317,7 +52317,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         );
         assert.deepEqual({ ...nodeJson.error, requestId: 'req_normalized' }, { ...workerJson.error, requestId: 'req_normalized' });
 
-        // Subsequent request loads audience.js cleanly and reaches normal route authentication.
+        // Subsequent request loads audience/routes.js cleanly and reaches normal route authentication.
         const recovered = await getNode('/v1/contacts');
         assert.equal(recovered.status, 401);
         assert.equal(JSON.parse(recovered.text).error?.code, 'AUTH_REQUIRED');

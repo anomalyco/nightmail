@@ -532,7 +532,7 @@ export const pauseCampaign = (ref: CampaignRef, reason: PauseReason) => moveCamp
 export const quarantineCampaign = (ref: CampaignRef, reason: PauseReason) => moveCampaign(ref, CAMPAIGN_RUNNING, 'paused', sql`${pausedFields(reason)},waiting_reason=NULL,waiting_until=NULL,quarantines=quarantines+1`);
 /** The list probe went out clean (or an owner or operator released its quarantine): release the rest. */
 export const clearProbe = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET probe_cleared_at=now(),probe_wait_until=NULL,updated_at=now() WHERE ${campaignRow(ref)} RETURNING id`;
-/** A sender in good standing skips the probe for recipients an earlier campaign delivered to (src/sending.ts listMailedCleanly). */
+/** A sender in good standing skips the probe for recipients an earlier campaign delivered to (src/campaigns/stats.ts listMailedCleanly). */
 export const skipProbe = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET probe_skipped_at=now(),updated_at=now() WHERE ${campaignRow(ref)} AND probe_cleared_at IS NULL AND probe_skipped_at IS NULL RETURNING id`;
 export const waitProbe = (ref: CampaignRef, until: string) => sql`UPDATE sending_campaigns SET probe_wait_until=${until}::timestamptz,waiting_reason='list_probe',waiting_until=${until}::timestamptz,updated_at=now() WHERE ${campaignRow(ref)} AND state='sending' AND probe_wait_until IS NULL RETURNING id`;
 /** paused, or failed after releasing some recipients, continues from its cursors on the same snapshot; the failure is

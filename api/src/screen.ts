@@ -6,7 +6,7 @@ import { errorTypeOf, log } from './log.js';
 import { keepScreenCall, outbound } from './screen-calls.js';
 import { CircuitBreaker, keepShadow, type ShadowItem } from './screen-shadow.js';
 import { cssRules, selectorList, selectorSubjects, stringEnd, unescapeCss, VISIBLE_WORDS } from './screened-html.js';
-import { formattedSender } from './sending.js';
+import { formattedSender } from './sending/mime.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 // The outbound gate asks whether the mail would deceive or harm its recipient. Each model has its own cutoff.
@@ -554,7 +554,7 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
 }
 
 // A Hosted campaign is screened copy by copy, exactly as single messages are, but each distinct copy only once
-// (src/sending.ts campaignVerdicts): a copy's verdict is keyed by the copy as it is delivered (copyKey), so recipients
+// (src/campaigns/materialize.ts campaignVerdicts): a copy's verdict is keyed by the copy as it is delivered (copyKey), so recipients
 // whose copies are the same share it.
 
 /** A campaign's screening state, on its review (sending_campaign_reviews.screen). */
@@ -572,7 +572,7 @@ export type CampaignScreen = {
  * A campaign copy's verdict key: the classifier and model, and the copy exactly as it is delivered (sender, reply-to,
  * subject, HTML, text and raw parts, its headers and attachments), built with the slots Nightmail adds per recipient
  * (the unsubscribe footer's link and the List-Unsubscribe headers) generated for the placeholder link
- * (src/sending.ts screenedAs) rather than the recipient's. The recipient's address isn't part of it.
+ * (src/campaigns/materialize.ts screenedAs) rather than the recipient's. The recipient's address isn't part of it.
  */
 export async function copyKey(runtime: Runtime, snapshot: EmailSnapshot): Promise<string> {
   const settings = runtime.config.screen;

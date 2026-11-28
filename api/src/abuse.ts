@@ -599,7 +599,7 @@ export type SampleBound = {
 };
 /**
  * The latest instant a read can be recorded through without skipping mail that becomes visible after it. Accepted mail
- * is stamped with clock_timestamp() inside the statement that writes it (dispatcher.ts recordOutcomes, sending.ts
+ * is stamped with clock_timestamp() inside the statement that writes it (dispatcher.ts recordOutcomes, sending/events.ts
  * persistEmailEvent and ingestRoutineSesEvents; check-premerge.ts "Accepted mail stamp" refuses any other stamp;
  * simulated mail, stamped with the Worker's clock, is never sampled: NOT v.simulated below). Such a statement takes
  * RowExclusiveLock on sending_email_events (or the partition it names) when it starts, before any row is stamped, and

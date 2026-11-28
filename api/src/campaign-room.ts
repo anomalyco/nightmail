@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { AGENT_PRESENCE_MS, ROOM_PEER_HEADER, ROOM_READMIT, type RoomAgent, type RoomPerson } from './campaign-room-protocol.js';
 
 // One room per campaign (roomName): who has its Write or Review page open, and which agents worked on it in the last two
-// minutes. The API admits a person (GET /v1/campaigns/{id}/room in sending.ts: a dashboard session that can read the
+// minutes. The API admits a person (GET /v1/campaigns/{id}/room in campaigns/routes.ts: a dashboard session that can read the
 // campaign, from the dashboard's Origin) and forwards the upgrade with them in ROOM_PEER_HEADER; nothing else reaches
 // the object. People live on their sockets (serializeAttachment), so the room hibernates between events and costs
 // nothing while nobody joins or leaves. Agents, who hold no socket, are reported only while someone is here (visit),
@@ -75,7 +75,7 @@ export class CampaignRoom extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** An agent read or saved the campaign (sending.ts, after its response); saved is the revision its save made. With
+  /** An agent read or saved the campaign (campaigns/views.ts, after its response); saved is the revision its save made. With
    *  nobody here it does nothing and says so (false), so the API can stop asking for a while; name is only looked up
    *  once someone is (resolve). */
   async visit(agent: Visit | { id: string; name?: undefined }, saved?: number): Promise<boolean> {

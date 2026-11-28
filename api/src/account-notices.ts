@@ -29,12 +29,12 @@ const keyOf = (origin: Origin) => 'standingEvent' in origin ? `standing:${origin
  * One notice to its recipients, from the platform workspace's own sender (NIGHTMAIL_NOTIFY_FROM), one email each.
  * 'unconfigured' when the installation has no such sender: the dashboard still shows what the email would have said.
  * `sealed`: the email carries a capability only its recipient may use (a sign-in link), so the platform workspace's own
- * readers see it withheld (sending.ts visibleEmailContent).
+ * readers see it withheld (campaigns/materialize.ts visibleEmailContent).
  */
 export async function deliverNotice(runtime: Runtime, to: string[], notice: Notice, origin: Origin, sealed = false): Promise<'sent' | 'unconfigured'> {
   const from = runtime.config.notifyFrom, sender = runtime.config.platformDomainWorkspace;
   if (!from || !sender || !runtime.config.multiTenant) return 'unconfigured';
-  const { sendSystemEmail } = await import('./sending.js');
+  const { sendSystemEmail } = await import('./sending/held-screen.js');
   try { await sendSystemEmail(runtime, sender, { from, to, ...notice, idempotencyKey: keyOf(origin), ...origin, sealed }); }
   catch (error) {
     // The key was used with other words: a build before this one sent this notice and its job is being retried.

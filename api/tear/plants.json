@@ -93,7 +93,7 @@
   {
     "label": "collab-1-no-rowlock",
     "checker": "campaign-collab",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/routes.ts",
     "old": "      const current = await findCampaign(db, a, campaignId, true);\n      const draft = {...input.draft,",
     "neu": "      const current = await findCampaign(db, a, campaignId);\n      const draft = {...input.draft,"
   },
@@ -107,7 +107,7 @@
   {
     "label": "attach-2-links-not-removed",
     "checker": "campaign-attachments",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/routes.ts",
     "old": "      await attachmentRows(db, a, input.draft.attachments, true);\n      await db.delete(attachmentLinks).where(and(scope(attachmentLinks, a), eq(attachmentLinks.ownerType, 'campaign'), eq(attachmentLinks.ownerId, campaignId)));\n",
     "neu": "      await attachmentRows(db, a, input.draft.attachments, true);\n"
   },
@@ -157,7 +157,7 @@
   {
     "label": "iso-2-campaign-foreign-audience",
     "checker": "workspace-isolation",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/routes.ts",
     "old": "      draftSender(c.env, a, draft);\n      await draftAudience(db, a, draft.audience);",
     "neu": "      draftSender(c.env, a, draft);"
   },

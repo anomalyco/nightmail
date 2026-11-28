@@ -88,7 +88,7 @@ export function redactDiagnostic(text: string | null | undefined): string | null
   return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(ADDRESS, '<address>').replace(IPV4, '<ip>').replace(IPV6_SHORT, '<ip>').replace(IPV6, '<ip>').replace(/\s+/g, ' ').trim().slice(0, LIMITS.diagnostic) || null;
 }
 /** An email event's data with the receiving server's reply (diagnosticCode) redacted that way, for the readers that
- *  get it with its addresses and IP addresses replaced: webhooks (sending.ts webhookData) and support's reads of one
+ *  get it with its addresses and IP addresses replaced: webhooks (sending/events.ts webhookData) and support's reads of one
  *  email's events. */
 export function withRedactedReply(data: Record<string, unknown>): Record<string, unknown> {
   if (typeof data.diagnosticCode !== 'string') return data;

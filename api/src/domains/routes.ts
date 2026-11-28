@@ -249,7 +249,7 @@ export function registerDomainsAndSettings(app: App) {
   });
   const dashboardSecurity=[{dashboardSession:[]},{secureDashboardSession:[]}] as Record<string,string[]>[];
   // The guarantee is the server's, not the dashboard's: no recipient is accepted, only the domain, and words of the
-  // person's own are screened like any send (sending.ts platformTestVerdict).
+  // person's own are screened like any send (sending/front-door.ts platformTestVerdict).
   const setupLine=(max:number)=>z.string().trim().min(1).max(max);
   // Other fields are ignored, as they were before the route took any: no recipient is ever read from the body.
   const TestEmailContent=z.object({subject:setupLine(SETUP_LIMITS.subject).refine(v=>!/[\r\n]/.test(v),'Subject cannot contain line breaks.').optional(),text:setupLine(SETUP_LIMITS.text).optional()}).openapi('TestEmailContent');
@@ -261,7 +261,7 @@ export function registerDomainsAndSettings(app: App) {
     const [row]=await c.env.db.select({name:domains.name}).from(domains).where(and(scoped(domains,a),eq(domains.id,c.req.valid('param').id)));
     if (!row) return notFound('Domain');
     allowedDomain(a,row.name);
-    const { admitTestEmail }=await wrapModuleLoad(() => import('../sending.js'));
+    const { admitTestEmail }=await wrapModuleLoad(() => import('../sending/front-door.js'));
     const custom=content?.subject && content.text ? { subject: content.subject, text: content.text } : undefined;
     return c.json(await admitTestEmail(c,a,row.name,a.email,custom),202);
   });

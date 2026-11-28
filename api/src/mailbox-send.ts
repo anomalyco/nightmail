@@ -20,7 +20,7 @@ import { recordEvents, mailboxEventCtes } from './mailbox-events.js';
 import { hostedMailBucket, isS3Bucket, mailKey, readMailBytes, sentMailKey, withMailObjects } from './mail-objects.js';
 import { readableMailboxKey } from './mailbox-setup.js';
 import { attachToMailboxes, htmlToPlain, messageIdList, normalizeSubject, sesMessageId, snippetOf, type Scope } from './mailbox-store.js';
-import type { SendRequest } from './sending.js';
+import type { SendRequest } from './sending/schemas.js';
 import { decodeBase64, MAX_JSON_ATTACHMENT_BYTES, mib, validateAttachment } from './outbound-content.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { withMemory } from './isolate-memory.js';
@@ -60,15 +60,15 @@ export async function resolveAttachments(runtime:Runtime, mailbox:Pick<MailboxRo
   }
   for(const item of items){
     if ('bytes' in item){
-      const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending.js'));
+      const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending/mime.js'));
       out.push(await storeAttachmentBytes(runtime,scope,{filename:item.filename,contentType:item.contentType,disposition:item.disposition,contentId:item.contentId},item.bytes()));
     } else if ('content' in item){
-      const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending.js'));
+      const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending/mime.js'));
       const metadata={filename:item.filename,contentType:item.contentType??'application/octet-stream',contentId:item.contentId,disposition:item.disposition},bytes=decodeBase64(item.content,'attachments');
       validateAttachment({...metadata,disposition:metadata.disposition??'attachment'},bytes,MAX_JSON_ATTACHMENT_BYTES);
       out.push(await storeAttachmentBytes(runtime,scope,metadata,bytes));
     } else if(item.id.startsWith('matt_')){
-      const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending.js'));
+      const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending/mime.js'));
       const [file]=await runtime.db.select({file:mailAttachments,region:mailMessages.region}).from(mailAttachments).innerJoin(mailMessages,eq(mailMessages.id,mailAttachments.messageId))
         .innerJoin(mailboxMessages,and(eq(mailboxMessages.messageId,mailAttachments.messageId),eq(mailboxMessages.mailboxId,mailbox.id))).where(and(eq(mailAttachments.workspaceId,scope.workspaceId),eq(mailAttachments.id,item.id),sql`coalesce(${mailMessages.verdicts}->>'virus',CASE WHEN ${mailMessages.direction}='outbound' THEN 'PASS' END)='PASS'`));
       if(!file?.region) throw new ApiError(404,'ATTACHMENT_NOT_FOUND','The attachment was not found in this mailbox.','attachments');
@@ -117,7 +117,7 @@ export async function archiveMailboxFiles(runtime:Runtime,wid:string,messageId:s
   if(!rows.length)return;
   const {region,file:first}=rows[0]!;
   if(!region || rows.some(r=>r.file.bucket!==first.bucket))throw new ApiError(404,'MAILBOX_OBJECT_NOT_FOUND','Inconsistent storage binding.');
-  const {verifiedAttachment}=await wrapModuleLoad(()=>import('./sending.js'));
+  const {verifiedAttachment}=await wrapModuleLoad(()=>import('./sending/mime.js'));
   // One file at a time: the largest file and its stored copy count against the isolate's budget (isolate-memory.ts).
   await withMemory(copyReservation(Math.max(...rows.map(r=>r.source.size))),()=>withMailObjects(runtime,wid,region,first.bucket,async objects=>{for(const {file,source} of rows){
     if(!ownsUploadKey(wid,source) || source.checksum!==file.sha256)throw new ApiError(404,'MAILBOX_OBJECT_NOT_FOUND','Invalid archive source.');
@@ -139,7 +139,7 @@ export async function archiveSentMessage(runtime:Runtime,wid:string,mid:string){
   if(!m?.rawBucket||!m.senderMailboxId||!m.region||m.rawKey||m.lifecycle==='default')return;
   const key=isS3Bucket(m.rawBucket)?`workspaces/${wid}/raw/sent/${mid}.eml`:mailKey(wid,m.lifecycle==='kept'?'kept':'ephemeral',m.senderMailboxId,mid);
   const files=await runtime.db.select().from(mailAttachments).where(and(eq(mailAttachments.workspaceId,wid),eq(mailAttachments.messageId,mid))).orderBy(mailAttachments.id);
-  const {inlineMessage}=await import('./sending.js');
+  const {inlineMessage}=await import('./sending/mime.js');
   // Its peak, reserved from the isolate's budget (isolate-memory.ts): the files, then the Sent message built from them
   // (1.37 times the files, plus the body as quoted-printable: up to 9 bytes for each character) beside the body's own
   // strings. The files are let go before the message is stored. To R2 it streams, so there is no third copy; an S3
@@ -267,7 +267,7 @@ export async function sendFromMailbox(runtime: Runtime, tx: DbExecutor, message:
       LEFT JOIN provider_pool_regions p ON p.region=c.region AND p.aws_account_id=c.aws_account_id
       LEFT JOIN mailbox_regions r ON r.region=c.region AND r.workspace_id=c.workspace_id AND r.account_id=c.aws_account_id
       WHERE c.workspace_id=d.workspace_id AND c.region=d.region AND ${connectionReady(sql`c`)})` : sql`(SELECT r.bucket FROM mailbox_regions r WHERE r.region=d.region AND r.workspace_id=d.workspace_id)`;
-  const { queueMailboxEmail } = await wrapModuleLoad(() => import('./sending.js'));
+  const { queueMailboxEmail } = await wrapModuleLoad(() => import('./sending/front-door.js'));
   const held = await lockSendScope(tx, message.scope.workspaceId);
   const domain=(await tx.execute<{id:string;region:string;bucket:string|null}>(sql`SELECT d.id,d.region,${bucket} AS bucket
     FROM mailbox_domains d WHERE d.id=${message.mailbox.domainId} AND d.workspace_id=${message.scope.workspaceId}`)).rows[0];

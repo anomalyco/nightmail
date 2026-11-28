@@ -111,7 +111,7 @@ const ACTION_SPECS = {
     facts: (t, scope) => sql`SELECT c.workspace_id, w.name AS workspace, c.draft->>'name' AS campaign, c.state AS status, c.expanded, c.total
       FROM sending_campaigns c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = ${t.campaignId} AND c.workspace_id = ANY(${scope})`,
     sentence: (_, f, w) => { w.labels.campaign = label(f.campaign); return `Pause the campaign {campaign} ${w.where}. It stops releasing new recipients (${Number(f.expanded)} of ${Number(f.total)} released so far); resuming continues from the same place.`; },
-    perform: async (runtime, tx, t, a, audit) => { await (await wrapModuleLoad(() => import('./sending.js'))).pauseSendingCampaign(runtime, tx, a, t.campaignId, audit); return { body: { id: t.campaignId, state: 'paused' } }; },
+    perform: async (runtime, tx, t, a, audit) => { await (await wrapModuleLoad(() => import('./sending/schemas.js'))).pauseSendingCampaign(runtime, tx, a, t.campaignId, audit); return { body: { id: t.campaignId, state: 'paused' } }; },
   }),
 };
 type Kind = keyof typeof ACTION_SPECS;

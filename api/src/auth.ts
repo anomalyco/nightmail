@@ -253,11 +253,11 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
   } else if (authorization !== undefined) {
     const token = authorization.match(/^Bearer (.+)$/i)?.[1];
     if (!token || token.length > 16 * 1024) throw new ApiError(401, 'AUTH_INVALID', 'The API token is invalid or has been revoked.');
-    // A send with a key this isolate verified a minute ago admits the request in one statement (sending.ts).
+    // A send with a key this isolate verified a minute ago admits the request in one statement (sending/front-door.ts).
     if (API_KEY.test(token) && c.env.config.multiTenant && c.req.method==='POST' && ['/v1/emails/send','/v1/emails/batch'].includes(c.req.path)) {
       const hash = await digest(token);
       if((verifiedFingerprints.get(hash)??0)>Date.now()) {
-        const {tryAtomicKeyAdmission}=await wrapModuleLoad(()=>import('./sending.js'));
+        const {tryAtomicKeyAdmission}=await wrapModuleLoad(()=>import('./sending/front-door.js'));
         // The statement found no working key: revoked or expired since this isolate verified it, refused as bearerActor would.
         const response=await tryAtomicKeyAdmission(c,charge=>credentialCtes(apiKeys,sql`${apiKeyRow(c, hash)} AND g.grant_id IS NULL`,charge))
           .catch(async (failure: unknown) => { throw failure instanceof ApiError && failure.code === 'AUTH_INVALID' ? await keyRefusal(c.env.db, sql`k.hash = ${hash}`) : failure; });

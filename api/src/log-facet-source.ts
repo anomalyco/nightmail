@@ -3,7 +3,7 @@ import { eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import type { DbExecutor } from './core/types.js';
 import { mailMessages as messages, mailboxMessages as links, mailboxes } from './db/mailbox.js';
 import { emails } from './db/sending.js';
-import { EmailStatusFilter } from './sending.js';
+import { EmailStatusFilter } from './sending/schemas.js';
 
 export type LogFacetCut = {
   asOf: string;

@@ -7,7 +7,7 @@ import { PUBLIC_MAILBOXES } from './list-hygiene.js';
 import { BLOCKLIST_PAUSE, RAMP, type RampLines } from './standing-model.js';
 import { emailAccepted, emailBounced, emailComplained, emailDelivered } from './email-outcomes.js';
 
-// A sending campaign's guards, beside the automatic pause (src/sending.ts campaignHealth and the release loop). Lines from
+// A sending campaign's guards, beside the automatic pause (src/campaigns/stats.ts campaignHealth and the release loop). Lines from
 // RampLines: each guard is off until the private NIGHTMAIL_RAMP setting names it, so unset, a campaign sends as before.
 //  - Blocklist replies: a receiving server that names a blocklist (src/delivery-history.ts blocklistNamed) is saying a domain
 //    or link in the mail is listed. Enough of them in a short window, each from a different receiving organisation (one

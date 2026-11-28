@@ -8,12 +8,12 @@ import { EmailEventData, type Runtime, type FeedbackItem, type JobHandler } from
 import { jobs } from '../db/core.js';
 import { contacts, mergeSuppression } from '../db/audience.js';
 import { emails } from '../db/sending.js';
-import type { RoutineIngress } from '../sending.js';
+import type { RoutineIngress } from '../sending/events.js';
 import { realDestination } from '../hosted-sending.js';
 import { eventTypes, type EventType, snsReceipts, type PublishedEvent, events, webhooks, deliveries } from '../db/operations.js';
 import { now, scoped, publishEvent } from '../webhooks/crypto.js';
 
-export const loadSendingOps = lazyModule(() => import('../sending.js'));
+export const loadSendingOps = lazyModule(() => import('../sending/events.js'));
 export const eventSchema = z.object({ id: z.string(), type: z.enum(eventTypes), createdAt: z.string(), workspaceId: z.string(), region: z.string().nullable(), data: EmailEventData }).openapi('Event');
 export function verifySesAccount(runtime: Runtime, message: unknown, topicArn: string) {
   const accountId = (message as { mail?: { sendingAccountId?: unknown } } | null)?.mail?.sendingAccountId;

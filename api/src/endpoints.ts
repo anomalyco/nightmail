@@ -948,7 +948,7 @@ export async function sendToEndpoint(runtime: Runtime, w: string, h: ClaimedWebh
 }
 
 // ── Forwards ──────────────────────────────────────────────────────────────────────────────
-/** One sent message's attachment limits (send-limits.ts, sending.ts AttachmentIds). */
+/** One sent message's attachment limits (send-limits.ts, sending/schemas.ts AttachmentIds). */
 const FORWARD_FILES = SEND_LIMITS.attachments, FORWARD_BODY = 500_000;
 /** Forwards one endpoint may send in an hour (FORWARD_LIMIT): a loop guard, not a volume cap. */
 const FORWARDS_PER_HOUR = 1000;
@@ -966,7 +966,7 @@ const forwardBlocked = () => new ApiError(422, 'FORWARD_BLOCKED', 'Automated, ju
  */
 async function forwardAttachments(runtime: Runtime, w: string, m: Received) {
   const rows = m.attachmentCount ? await runtime.db.select().from(mailAttachments).where(and(eq(mailAttachments.workspaceId, w), eq(mailAttachments.messageId, m.id))).orderBy(mailAttachments.id) : [];
-  const { storeAttachmentBytes } = rows.length ? await wrapModuleLoad(() => import('./sending.js')) : { storeAttachmentBytes: undefined };
+  const { storeAttachmentBytes } = rows.length ? await wrapModuleLoad(() => import('./sending/mime.js')) : { storeAttachmentBytes: undefined };
   const screened = rows.length && runtime.config.hostedScreen ? (await wrapModuleLoad(() => import('./screened-html.js'))).screenedAttachment : undefined;
   const files: Awaited<ReturnType<NonNullable<typeof storeAttachmentBytes>>>[] = [], left: string[] = [], contentIds = new Set<string>();
   let bytes = 0;

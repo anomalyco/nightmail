@@ -28,7 +28,7 @@ function loadDeps() {
 // per-invocation setup the queue consumer did, and an evicted object resumes from storage
 // without bursting past its quota share. PostgreSQL rows remain the only queue.
 //
-// Content screening runs at API accept time (src/sending.ts) before anything enters the sending queue, so the mail room
+// Content screening runs at API accept time (src/sending/front-door.ts) before anything enters the sending queue, so the mail room
 // never calls a classifier and visitor wakes never interrupt running alarms. A wake arms the alarm when idle and nudges
 // priorityWake when running; the platform runs one alarm() at a time, so runs never overlap.
 

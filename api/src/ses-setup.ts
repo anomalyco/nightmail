@@ -59,7 +59,7 @@ export type SesSetupOptions = { region: string; installationId: string; namespac
 export type SesProvisionOptions = SesSetupOptions & { registerTopic: (accountId: string, topicArn: string) => Promise<void> };
 
 // OPEN/CLICK destinations support tracking-enabled sends; per-message tracking overrides
-// in sending.ts still disable instrumentation when tracking:false. Consent stays in Nightmail.
+// in sending/front-door.ts still disable instrumentation when tracking:false. Consent stays in Nightmail.
 // SEND is intentionally absent: provider acceptance is already recorded from the SendEmail response,
 // and the callback would double feedback volume at the full send rate.
 const EVENTS = FEEDBACK_EVENTS;

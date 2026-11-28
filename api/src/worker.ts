@@ -417,7 +417,7 @@ export default {
       // The network Cloudflare resolved the client to, never a value the request carried.
       headers.delete(clientNetworkHeader);
       // A browser's WebSocket can't send headers: the campaign room's upgrade names its account and workspace in the query,
-      // which stand in for the headers the dashboard sends with every other request (sending.ts, the room route).
+      // which stand in for the headers the dashboard sends with every other request (campaigns/routes.ts, the room route).
       if (/^\/v1\/campaigns\/[^/]+\/room$/.test(pathname) && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
         for (const name of ['account', 'workspace']) { const value = url.searchParams.get(name); if (value && !requestHeaderNames(name).some(header => headers.has(header))) headers.set(requestHeaderNames(name)[0]!, value); }
       }
@@ -494,7 +494,7 @@ export default {
             lastPriorityLagWrite = nowMs;
             lastPriorityLagHigh = fresh.oldestMs >= 60_000;
             try {
-              const { recordFeedbackLag } = await import('./sending.js');
+              const { recordFeedbackLag } = await import('./sending/events.js');
               await recordFeedbackLag(runtime.db, 'priority', fresh.count, fresh.oldestMs);
             } catch { /* Minute cron refreshes lag independently. */ }
           }
@@ -589,7 +589,7 @@ export default {
       try {
       if (lagSamples.length) {
         try {
-          const { recordFeedbackLag, FEEDBACK_LAG_MIN_DEPTH } = await import('./sending.js');
+          const { recordFeedbackLag, FEEDBACK_LAG_MIN_DEPTH } = await import('./sending/events.js');
           // Apply a depth floor on queue-level metrics(): a few poison/unmatchable messages sitting in Cloudflare retry
           // backoff carry their original enqueue timestamp but do not represent a stalled consumer backlog.
           for (const sample of lagSamples) {
@@ -607,7 +607,7 @@ export default {
       await (await core.wrapModuleLoad(() => import('./glass-deliverability.js'))).refreshDeliverabilitySources(runtime);
       try { await syncOutboundMessages(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'MAILBOX_OUTBOUND_SYNC_FAILED' }); }
       // Screen any pre-deploy or rollout-window rows held with screened=false outside the mail room before waking shards.
-      try { await (await core.wrapModuleLoad(() => import('./sending.js'))).screenHeldMail(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
+      try { await (await core.wrapModuleLoad(() => import('./sending/held-screen.js'))).screenHeldMail(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
       // Received mail queued for the refilling budget comes due within minutes; the drain below runs its release.
       try { await (await core.wrapModuleLoad(() => import('./mailbox-staging.js'))).scheduleHoldRelease(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'MAILBOX_HOLD_RELEASE_FAILED' }); }
       await Promise.allSettled((await dispatchPartitions(runtime, true)).map(({ region, accountId, kind, maxSendRate }) => wakeDispatchers(env, region, accountId, undefined, kind, false, maxSendRate)));

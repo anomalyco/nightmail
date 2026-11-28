@@ -47,7 +47,7 @@ const [{ createApp }, { nodeRuntime }, ops, snsIngress, sesFeedback, sending, { 
   import("../../src/webhooks/operations.ts"),
   import("../../src/ses/sns-ingress.ts"),
   import("../../src/ses/feedback.ts"),
-  import("../../src/sending.ts"),
+  import("../../src/sending/events.ts"),
   import("../../src/auth.ts"),
 ]);
 

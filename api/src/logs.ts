@@ -15,7 +15,8 @@ import type { AggregateTicket } from './log-facet-aggregate-view.js';
 import { mailMessages as messages } from './db/mailbox.js';
 import { readsDelivery, visibleAddresses } from './inbound-threads.js';
 import { accessibleMessages, sentThreadId, threadSize } from './thread-view.js';
-import { EmailStatusFilter, listedSubject, mailWhere, pageBinding, sentUntrustedContent, SubstringSearch } from './sending.js';
+import { EmailStatusFilter, mailWhere, pageBinding, sentUntrustedContent, SubstringSearch } from './sending/schemas.js';
+import { listedSubject } from './campaigns/views.js';
 
 // Logs: sent and received mail in one list, newest first, from one SQL statement. Each side keeps its own index
 // (sending_emails_created_page, mail_messages_tenant_page) and limit; the outer query merges the two pages. The cursor

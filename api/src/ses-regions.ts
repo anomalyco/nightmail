@@ -9,7 +9,7 @@ import { recordAudit } from './audit.js';
 import { apiKeys, jobs } from './db/core.js';
 import { domains } from './db/operations.js';
 import { sesRegions } from './db/ses-regions.js';
-import { approvedOriginUser } from './sending.js';
+import { approvedOriginUser } from './sending/events.js';
 import { getMcpGrantActor } from './mcp-auth.js';
 import { enqueue } from './jobs.js';
 import { workspaceConnection, workspaceCredentials, type ReadyConnection } from './provider-credentials.js';

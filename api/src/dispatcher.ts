@@ -6,7 +6,13 @@ import { rowId } from './core/http.js';
 import { log } from './log.js';
 import type { Actor, DbExecutor, Runtime } from './core/types.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
-import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, recipientIneligibleReasonSql, resolveHostedContentPolicy, sesDailyReserve, sharedFormatRefusal, sizeCheck, statusForEvent, storageUnavailable, attachmentReads, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
+import { approvedOriginUser, checkedDispatchAttachments, originAllowed, publicEventType, queueSimulatedFeedback, rank, statusForEvent } from './sending/events.js';
+import { customerCredits, QUOTA_REFRESH_MS, sesDailyReserve } from './sending/schemas.js';
+import { formattedSender, inlineMessage, resolveHostedContentPolicy, sharedFormatRefusal, sizeCheck, storageUnavailable, attachmentReads, verifiedAttachment } from './sending/mime.js';
+import { LINK_RECORD_RECHECK_MS } from './campaigns/run.js';
+import { materializeCampaignEmail } from './campaigns/materialize.js';
+import { recipientIneligibleReasonSql } from './sending/front-door.js';
+import { terminalColumns, terminalEvents } from './states.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { tieAllows } from './approval-ties.js';
 import { principal } from './mail-gateway.js';
@@ -336,7 +342,7 @@ export function brake(gate: GateState, kind?: EmailSnapshot['kind']) {
   gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 1000);
   gate.marketingAllowedAt = Math.max(gate.marketingAllowedAt ?? 0, now + 1000);
 }
-// `share`: an outside workspace's marketing also fits in what is left of the customer share (src/sending.ts customerCredits).
+// `share`: an outside workspace's marketing also fits in what is left of the customer share (src/sending/schemas.ts customerCredits).
 const marketingCredits = (q: QuotaSnapshot, percent: number, share?: number) => Math.max(0, Math.min(q.max24HourSend - q.sentLast24Hours - sesDailyReserve(q.max24HourSend, percent),
   share === undefined ? Infinity : customerCredits(q.max24HourSend, q.customerSent ?? 0, share)));
 function dailyRemaining(gate: GateState, headroomPercent?: number, shard?: DispatcherOptions['shard'], share?: number) {
@@ -573,7 +579,7 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   let s = mail.snapshot;
   const refusal = sharedFormatRefusal(s, policy);
   if (refusal) throw refusal;
-  // Content screening runs at accept time / campaign prepare (src/sending.ts) before rows enter sending_emails; the mail
+  // Content screening runs at accept time / campaign prepare (src/sending/front-door.ts) before rows enter sending_emails; the mail
   // room never calls an external classifier. Deferred campaigns and any pre-deploy rows still apply local in-memory
   // hostedCopy / attachment checks here.
   const { rules } = policy;
@@ -778,7 +784,7 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
             AND r.connection IS NOT NULL AND r.connection->>'paused_at' IS NULL AND (r.connection->>'kind'='byo' OR ${isSimulatedSes(runtime)} OR r.connection->>'tenant_state'='ready')
             AND r.connection->>'feedback_topic_arn' IS NOT DISTINCT FROM x.feedback_topic) END` : sql`true`} AS binding_ok,
         (x.campaign_id IS NULL OR EXISTS (SELECT 1 FROM campaign_state c WHERE c.workspace_id = x.workspace_id AND c.id = x.campaign_id AND c.state <> 'canceled')) AS campaign_allowed,
-         -- A required notice (src/sending.ts requiredNotice) skips only the marketing consent checks: it still never goes
+         -- A required notice (src/sending/front-door.ts requiredNotice) skips only the marketing consent checks: it still never goes
          -- to a suppressed address or a deleted contact.
          (SELECT cause.reason FROM dest d LEFT JOIN consent c USING (workspace_id,email)
           CROSS JOIN LATERAL (SELECT ${recipientIneligibleReasonSql({ marketing: sql`x.marketing`, replyAuthors: sql`x.reply_authors`, topic: sql`x.topic_id`, notice: sql`x.notice`, risk: false })} AS reason) cause

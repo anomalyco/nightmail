@@ -11,7 +11,7 @@
     "label": "lc-2-send-before-prepared",
     "rule": "lifecycle.validate-before-send-and-stop-bounds",
     "checker": "campaign-lifecycle",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/run.ts",
     "old": "await db.execute(recordPrepared(ref, cursor, runningState({ prepared: cursor, total: campaign.total, scheduledAt: campaign.scheduledAt })));",
     "neu": "await db.execute(recordPrepared(ref, Math.max(0, cursor - 1), 'sending'));"
   },
@@ -35,7 +35,7 @@
     "label": "lc-5-probe-wait-skipped",
     "rule": "lifecycle.probe-enforced",
     "checker": "campaign-lifecycle",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/run.ts",
     "old": "if (Date.parse(row.probeWaitUntil) > dbNow) await hold('list_probe', row.probeWaitUntil);",
     "neu": "if (false) await hold('list_probe', row.probeWaitUntil);"
   },
@@ -51,7 +51,7 @@
     "label": "lc-7-rate-share-ignored",
     "rule": "lifecycle.rate-matches-view",
     "checker": "campaign-lifecycle",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/run.ts",
     "old": "if (row.rateShare !== null && row.rateShare < 1 && Number(row.rate) > 0) {",
     "neu": "if (false && row.rateShare !== null && row.rateShare < 1 && Number(row.rate) > 0) {"
   },
@@ -59,7 +59,7 @@
     "label": "lc-8-stats-double-count-exceeds-released",
     "rule": "lifecycle.stats-monotonic-bounded",
     "checker": "campaign-lifecycle",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/stats.ts",
     "old": "totals[key] += item[key];",
     "neu": "totals[key] += item[key] * 2;"
   },
@@ -67,7 +67,7 @@
     "label": "lc-9-delivered-only-skip-all-stays-sending",
     "rule": "lifecycle.never-stuck",
     "checker": "campaign-lifecycle",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/run.ts",
     "old": "if (released.completed) { if (!released.count) await settle(); return 'done'; }",
     "neu": "if (released.completed) return 'done';"
   }

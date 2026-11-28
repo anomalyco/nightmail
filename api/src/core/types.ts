@@ -23,7 +23,7 @@ export function withoutVerdict<T extends Record<string, unknown>>(data: T): T {
 /** withoutVerdict inside a statement: a stored event's data (jsonb) as it is copied into a published event. */
 export const withoutVerdictSql = (data: SQL) => sql`(${data}-'screen'::text)`;
 /** An email event's data, in the email's events and in its webhook: with what SES reported about a bounce or a delay.
- *  The reply is the one text here that a third party writes: the webhook's copy has no addresses (webhookData, sending.ts). */
+ *  The reply is the one text here that a third party writes: the webhook's copy has no addresses (webhookData, sending/events.ts). */
 export const EmailEventData = z.object({suppressionReason:SuppressionReason.optional(),
   bounceType:z.string().optional().describe('A bounce (email.bounced): SES bounceType — Permanent (hard bounce), Transient (soft bounce), Undetermined, or Unknown.'),
   bounceSubType:z.string().optional().describe('A bounce (email.bounced): SES bounceSubType, such as General, NoEmail, Suppressed, OnAccountSuppressionList, MailboxFull, MessageTooLarge, ContentRejected, AttachmentRejected, or EmailValidationSuppressed.'),

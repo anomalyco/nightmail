@@ -138,7 +138,7 @@ try {
           await seedAbuseStages(runtime);
           await drainSamples();
         }).catch(() => log('warn',{code:'ABUSE_SAMPLE_DRAIN_FAILED'})).finally(() => { sampler=undefined; });
-        if (recover) try { await (await import('./sending.js')).screenHeldMail(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
+        if (recover) try { await (await import('./sending/held-screen.js')).screenHeldMail(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
         if (recover) try { await scheduleHoldRelease(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'MAILBOX_HOLD_RELEASE_FAILED' }); }
         if (recover && runtime.config.multiTenant) try { await (await import('./billing/stripe-jobs.js')).billingMinute(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'BILLING_MINUTE_FAILED' }); }
         if (recover && runtime.config.multiTenant) try { await (await import('./domain-setup.js')).domainSetupTick(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'DOMAIN_SETUP_TICK_FAILED' }); }

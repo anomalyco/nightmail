@@ -2,7 +2,7 @@
 // address from "<productName> Setup" at setup@ on the workspace's built-in domain, replies from their own mail app, and
 // the reply comes back into the workspace (the built-in domain's catch-all delivers it to its Inbox). The dashboard
 // prefills these words; sent unchanged they are ours, so they skip the classifier as the fixed test email does
-// (sending.ts platformTestVerdict), and an edited copy is screened like any send. They read as a real message, never as a
+// (sending/front-door.ts platformTestVerdict), and an edited copy is screened like any send. They read as a real message, never as a
 // test or a placeholder: spam filters mark mail that does (a customer's first email landed in spam for it). Sent as plain
 // text. Only the brand is imported: the dashboard bundles this file.
 import { productName } from './brand.js';

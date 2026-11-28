@@ -104,7 +104,7 @@ const REGION = "us-east-1";
 const BUCKET = "tear-fixture";
 const TOPIC = `arn:aws:sns:${REGION}:${POOL}:tear-inbound`;
 const FEEDBACK = `arn:aws:sns:${REGION}:${POOL}:tear-feedback`;
-// Matches SENDING_LIMITS.storedAttachmentBytes in api/src/sending.ts (100 GiB since commit 7643c5d3).
+// Matches SENDING_LIMITS.storedAttachmentBytes in api/src/sending/schemas.ts (100 GiB since commit 7643c5d3).
 const UPLOAD_LIMIT = 100 * 1024 * 1024 * 1024;
 const UPLOAD_SIZE = 3;
 
