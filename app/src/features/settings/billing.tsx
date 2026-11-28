@@ -14,7 +14,7 @@ import { date, number } from '../../lib/format'
 import './billing.css'
 import { productName } from '../../../../api/src/brand'
 import { GOOD_STANDING } from '../../../../api/src/standing-model'
-import { RATES } from '../../../../api/src/billing/rates'
+import { BILLING_LIMITS, CREDIT, dollars, RATES } from '../../../../api/src/billing/rates'
 import { resourceOf } from '../../data/invalidation'
 
 type RowProps = { title: ReactNode; error?: ReactNode; children: ReactNode }
@@ -239,7 +239,6 @@ function CardControl({ summary: b }: { summary: BillingSummary | undefined }) {
 // Every way credit is added names the terms it is sold under: refunds and the 12-month expiry (Terms §5.7).
 const TERMS = <>By adding credit you agree to the <Link to="/legal/terms#refunds-and-credit-expiry">refund and expiry terms</Link>.</>
 const added = (cents: number) => `${centsUsd(cents)} added to your balance`
-const dollars = (cents: number) => `$${(cents / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 
 // Auto-recharge: one row with its setting as the value ("$25 below $10", or where it stands) and its switch. The amounts,
 // how it works and the terms open from Edit, and from turning it on, which asks before the card is charged; turning it
@@ -274,12 +273,14 @@ function RechargeDialog({ settings, hasCard, enable, capped, Row, onClose }: { s
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const cents = { threshold: parseDollars(form.threshold), amount: parseDollars(form.amount), cap: parseDollars(form.cap) }
-  const invalid = { threshold: cents.threshold === null || cents.threshold < 500 || cents.threshold > 100_000, amount: cents.amount === null || cents.amount < 2000 || cents.amount > 1_000_000,
-    cap: cents.cap === null || cents.cap < (cents.amount ?? 0) || cents.cap > 25_000_000 }
+  const limit = BILLING_LIMITS.autoRecharge, outside = (value: number | null, min: number, max: number) => value === null || value < min || value > max
+  const invalid = { threshold: outside(cents.threshold, limit.minThresholdCents, limit.maxThresholdCents), amount: outside(cents.amount, limit.minAmountCents, limit.maxAmountCents),
+    cap: outside(cents.cap, Math.max(limit.minAmountCents, cents.amount ?? 0), limit.maxMonthlyCapCents) }
   const valid = !invalid.threshold && !invalid.amount && !invalid.cap
   const changed = form.threshold !== initial.threshold || form.amount !== initial.amount || form.cap !== initial.cap
   // Each amount's range shows once the value is outside it.
-  const rows = [['threshold', 'When balance falls below', '$5 to $1,000'], ['amount', 'Add', '$20 to $10,000 each time'], ['cap', 'Monthly limit', '$20 to $250,000, at least the Add amount']] as const
+  const rows = [['threshold', 'When balance falls below', `${dollars(limit.minThresholdCents)} to ${dollars(limit.maxThresholdCents)}`], ['amount', 'Add', `${dollars(limit.minAmountCents)} to ${dollars(limit.maxAmountCents)} each time`],
+    ['cap', 'Monthly limit', `${dollars(limit.minAmountCents)} to ${dollars(limit.maxMonthlyCapCents)}, at least the Add amount`]] as const
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!valid || !hasCard || (!enable && !changed)) return
@@ -445,7 +446,7 @@ function AddCredit({ open, onOpenChange, summary: b }: { open: boolean; onOpenCh
   const [charging, setCharging] = useState<string | null>(null)
   useEffect(() => { if (open) { setConfirming(false); setError(null); setMethod(card ? 'saved_card' : 'checkout') } }, [open, card])
   const amount = preset === 'custom' ? parseDollars(custom) : preset
-  const invalid = amount === null || amount < 2000 || amount > 1_000_000
+  const invalid = amount === null || amount < CREDIT.minTopUpCents || amount > CREDIT.maxTopUpCents
   const charge = usePaymentPoll(charging, payment => {
     setCharging(null); setBusy(false); refresh()
     if (payment?.status === 'succeeded') { toast(added(payment.amountCents), 'success'); onOpenChange(false) }
@@ -471,8 +472,8 @@ function AddCredit({ open, onOpenChange, summary: b }: { open: boolean; onOpenCh
       <div className="billing-choice" role="radiogroup" aria-label="Amount" onKeyDown={working ? undefined : radioKeys<number | 'custom'>([...PRESETS, 'custom'], preset, setPreset)}>
         {[...PRESETS, 'custom' as const].map(value => <button key={value} type="button" role="radio" aria-checked={preset === value} tabIndex={preset === value ? 0 : -1} className="billing-choice__item" disabled={working} onClick={() => setPreset(value)}>{value === 'custom' ? 'Custom' : centsUsd(value).replace('.00', '')}</button>)}
       </div>
-      {preset === 'custom' && <span className="billing-dollars billing-add__custom"><span aria-hidden="true">$</span><Input autoFocus aria-label="Amount in dollars, $20 to $10,000" inputMode="decimal" placeholder="75" value={custom} disabled={working} onChange={event => setCustom(event.target.value)} /></span>}
-      {preset === 'custom' && custom && invalid && <p className="ui-field__error" role="alert">Add $20 to $10,000 at a time.</p>}
+      {preset === 'custom' && <span className="billing-dollars billing-add__custom"><span aria-hidden="true">$</span><Input autoFocus aria-label={`Amount in dollars, ${dollars(CREDIT.minTopUpCents)} to ${dollars(CREDIT.maxTopUpCents)}`} inputMode="decimal" placeholder="75" value={custom} disabled={working} onChange={event => setCustom(event.target.value)} /></span>}
+      {preset === 'custom' && custom && invalid && <p className="ui-field__error" role="alert">Add {dollars(CREDIT.minTopUpCents)} to {dollars(CREDIT.maxTopUpCents)} at a time.</p>}
       <div className="billing-methods" role="radiogroup" aria-label="Pay with" onKeyDown={working ? undefined : radioKeys<typeof method>(card ? ['saved_card', 'checkout'] : ['checkout'], method, setMethod)}>
         {card && <button type="button" role="radio" aria-checked={method === 'saved_card'} tabIndex={method === 'saved_card' ? 0 : -1} className="billing-method" disabled={working} onClick={() => setMethod('saved_card')}><CreditCard size={16} aria-hidden="true" /><span>Charge {cardLabel(card)}</span></button>}
         <button type="button" role="radio" aria-checked={method === 'checkout'} tabIndex={method === 'checkout' ? 0 : -1} className="billing-method" disabled={working} onClick={() => setMethod('checkout')}><ArrowUpRight size={16} aria-hidden="true" /><span>Pay with Stripe Checkout</span></button>

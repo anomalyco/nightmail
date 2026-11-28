@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from '../core.js';
-import { perThousandUsd, RATES } from './rates.js';
+import { CREDIT, perThousandUsd, RATES } from './rates.js';
 import type { BillingPosition, BillingSummary } from './types.js';
 
 export type BillingAccountRow = {
@@ -55,7 +55,7 @@ export function billingSummary(row: BillingAccountRow, view: BillingView): Billi
     autoRecharge: view.amounts ? { enabled: !!row.recharge_enabled, thresholdCents: cents(row.recharge_threshold_uc, '1000000000'), amountCents: Number(amount / 1_000_000n), monthlyCapCents: Number(cap / 1_000_000n),
       monthTotalCents: Number(monthTotal / 1_000_000n), disabledReason: row.recharge_disabled_reason, pending: !!row.recharge_pending_attempt } : null,
     paymentMethod: view.amounts && row.card_last4 ? { brand: row.card_brand ?? 'card', last4: row.card_last4, expMonth: row.card_exp_month ?? 0, expYear: row.card_exp_year ?? 0 } : null,
-    prices: { emailPerThousand: perThousandUsd(RATES.emailUc), decisionPerThousand: perThousandUsd(RATES.omenUc), omenPerThousand: perThousandUsd(RATES.omenUc), storagePerGbMonth: '0.25', freeEmails: RATES.freeSentEmails, freeSentEmails: RATES.freeSentEmails, freeReceivedEmails: RATES.freeReceivedEmails, freeStorageBytes: Number(RATES.freeStorageBytes), topUpMinCents: 2000, currency: 'USD' },
+    prices: { emailPerThousand: perThousandUsd(RATES.emailUc), decisionPerThousand: perThousandUsd(RATES.omenUc), omenPerThousand: perThousandUsd(RATES.omenUc), storagePerGbMonth: '0.25', freeEmails: RATES.freeSentEmails, freeSentEmails: RATES.freeSentEmails, freeReceivedEmails: RATES.freeReceivedEmails, freeStorageBytes: Number(RATES.freeStorageBytes), topUpMinCents: CREDIT.minTopUpCents, currency: 'USD' },
     topUpUrl: `${view.publicUrl ?? ''}/settings#billing`,
   };
 }

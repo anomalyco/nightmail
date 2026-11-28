@@ -5,7 +5,7 @@ import { ApiError, dashboardSession, errors, json, notFound, response, security,
 import { operatorRole, type OperatorRole } from './operator-identity.js';
 import { applyChange, type Change } from './standing.js';
 import { loadDisplayedStanding, scoreView, StandingSchema } from './sender-score.js';
-import { clearProbe, queueCampaignRun, resumeCampaign } from './states.js';
+import { clearProbe, queueCampaignRun, resumeCampaign, runningState } from './states.js';
 import { productName } from './brand.js';
 import { placesOpened, readPlaces, setLimit } from './signups.js';
 import { waitlistNoticeStatus } from './account-notices.js';
@@ -197,12 +197,12 @@ export const operatorChanges = {
   },
   /** Releases a paused Hosted campaign (a quarantine's review): it sends again, or waits for its schedule. */
   releaseCampaign: async (tx: DbExecutor, operator: OperatorIdentity, campaignId: string, body: Reasons, workspaceId?: string): OperatorChange<ReturnType<typeof done>> => {
-    const { rows: [campaign] } = await tx.execute<{ workspace_id: string; state: string; expanded: number; request_id: string | null; scheduled_at: string | null; pause_reason: { code: string } | null; quarantines: number; name: string }>(sql`SELECT c.workspace_id,c.state,c.expanded,c.request_id,c.scheduled_at,c.pause_reason,c.quarantines,coalesce(c.draft->>'name',c.id) AS name
+    const { rows: [campaign] } = await tx.execute<{ workspace_id: string; state: string; prepared: number; total: number; request_id: string | null; scheduled_at: string | null; pause_reason: { code: string } | null; quarantines: number; name: string }>(sql`SELECT c.workspace_id,c.state,c.prepared,c.total,c.request_id,c.scheduled_at,c.pause_reason,c.quarantines,coalesce(c.draft->>'name',c.id) AS name
       FROM sending_campaigns c JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared' WHERE c.id=${campaignId}`);
     if (!campaign || (workspaceId !== undefined && campaign.workspace_id !== workspaceId)) notFound('Campaign');
     if (campaign!.state !== 'paused') throw new ApiError(409, 'CAMPAIGN_NOT_PAUSED', 'Only a paused campaign can be released.');
     const wid = campaign!.workspace_id, ref = { workspaceId: wid, id: campaignId };
-    const next = campaign!.scheduled_at && Date.parse(campaign!.scheduled_at) > Date.now() && campaign!.expanded === 0 ? 'scheduled' as const : 'sending' as const;
+    const next = runningState({ prepared: campaign!.prepared, total: campaign!.total, scheduledAt: campaign!.scheduled_at });
     if (!(await tx.execute(resumeCampaign(ref, next))).rows.length) throw new ApiError(409, 'CAMPAIGN_LOCKED', 'The campaign changed meanwhile; reload it.');
     await tx.execute(clearProbe(ref));
     await tx.execute(queueCampaignRun(ref, campaign!.request_id ? { requestId: campaign!.request_id } : {}, next === 'scheduled' ? campaign!.scheduled_at : null));

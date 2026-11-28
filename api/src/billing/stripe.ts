@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, id, log, notFound, type Config, type Database, type DbExecutor, type Runtime } from '../core.js';
 import { UC_PER_CENT } from './money.js';
+import { BILLING_LIMITS, CREDIT, dollars } from './rates.js';
 import type { AutoRechargeSettings, PaymentView } from './types.js';
 import { productName } from '../brand.js';
 
@@ -143,14 +144,17 @@ export async function creditAttempt(runtime: Runtime, attemptId: string, paid: P
   return runtime.db.transaction(async tx => {
     const locked = await lockAttempt(tx, attemptId);
     if (!locked) return 'missing';
-    const { attempt: a } = locked;
+    const { attempt: a, account } = locked;
     if (!OPEN.includes(a.status)) {
       if (a.status !== 'succeeded') log('error', { code: 'BILLING_LATE_PAYMENT', workspaceId: a.workspace_id, attemptId, status: a.status, message: 'Stripe reports a payment for a closed attempt; credit or refund it by hand.' });
-      // Checkout creates its invoice after the payment: checkout.session.completed credits with no invoice, and
-      // invoice.paid arrives later. Record the invoice then (never replacing one), so the payment has its links and a
-      // refund goes through a credit note. Nothing about the credit changes.
-      else if (paid.invoice) await tx.execute(sql`UPDATE billing_payment_attempts SET stripe_invoice=${paid.invoice}, invoice_url=coalesce(invoice_url,${paid.invoiceUrl ?? null}),
-        invoice_pdf=coalesce(invoice_pdf,${paid.invoicePdf ?? null}), updated_at=now() WHERE id=${attemptId} AND status='succeeded' AND stripe_invoice IS NULL`);
+      // Record what Stripe reports and the attempt lacks, never replacing a value. Checkout creates its invoice after the
+      // payment (checkout.session.completed credits with no invoice, invoice.paid arrives later), so the payment gets its
+      // links and a refund goes through a credit note; a payment for a closed attempt keeps the references an operator
+      // refunds it by. Nothing about the credit changes.
+      await tx.execute(sql`UPDATE billing_payment_attempts SET charged_cents=coalesce(charged_cents,${paid.chargedCents ?? null}::int), tax_cents=coalesce(tax_cents,${paid.taxCents ?? null}::int),
+        stripe_payment_intent=coalesce(stripe_payment_intent,${paid.paymentIntent ?? null}), stripe_charge=coalesce(stripe_charge,${paid.charge ?? null}),
+        stripe_invoice=coalesce(stripe_invoice,${paid.invoice ?? null}), invoice_url=coalesce(invoice_url,${paid.invoiceUrl ?? null}),
+        invoice_pdf=coalesce(invoice_pdf,${paid.invoicePdf ?? null}), receipt_url=coalesce(receipt_url,${paid.receiptUrl ?? null}), updated_at=now() WHERE id=${attemptId}`);
       return a.status;
     }
     const facts = sql`charged_cents=coalesce(${paid.chargedCents ?? null}::int,charged_cents), tax_cents=coalesce(${paid.taxCents ?? null}::int,tax_cents),
@@ -159,9 +163,11 @@ export async function creditAttempt(runtime: Runtime, attemptId: string, paid: P
       invoice_pdf=coalesce(${paid.invoicePdf ?? null},invoice_pdf), receipt_url=coalesce(${paid.receiptUrl ?? null},receipt_url), settled_at=now(), updated_at=now()`;
     // Compare excluding tax (Console #3695): the credit is what the customer bought, tax is on top.
     if (!Number.isSafeInteger(paid.creditCents) || BigInt(paid.creditCents) * UC_PER_CENT !== BigInt(a.amount_uc)) {
-      await tx.execute(sql`UPDATE billing_payment_attempts SET status='failed', failure_code='amount_mismatch', failure_message='Stripe charged a different amount than this top-up.', ${facts}
+      const code = 'amount_mismatch', message = 'Stripe charged a different amount than this top-up.';
+      await tx.execute(sql`UPDATE billing_payment_attempts SET status='failed', failure_code=${code}, failure_message=${message}, ${facts}
         WHERE id=${attemptId} AND status IN ${open}`);
-      if (a.kind === 'recharge') await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=NULL, updated_at=now() WHERE workspace_id=${a.workspace_id} AND recharge_pending_attempt=${attemptId}`);
+      // Like a decline: a recharge left on would charge the card again within the minute.
+      if (a.kind === 'recharge') await stopRecharge(tx, a, account, code, message);
       log('error', { code: 'BILLING_AMOUNT_MISMATCH', workspaceId: a.workspace_id, attemptId, expectedCents: cents(a.amount_uc), paidCents: paid.creditCents });
       return 'failed';
     }
@@ -191,13 +197,18 @@ export async function failAttempt(runtime: Runtime, attemptId: string, code: str
       await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=NULL, updated_at=now() WHERE workspace_id=${a.workspace_id} AND recharge_pending_attempt=${attemptId}`);
       return status;
     }
-    await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=CASE WHEN recharge_pending_attempt=${attemptId} THEN NULL ELSE recharge_pending_attempt END,
-      recharge_enabled=false, recharge_disabled_reason=${code.slice(0, 100)}, recharge_disabled_at=now(), updated_at=now() WHERE workspace_id=${a.workspace_id}`);
-    const data = { attemptId, code, message: message?.slice(0, 300) ?? null, last4: a.card_last4 ?? account.card_last4 };
-    await tx.execute(sql`SELECT billing_notice(${a.workspace_id}, 'recharge_failed', ${'recharge_failed:' + attemptId}, ${JSON.stringify(data)}::jsonb)`);
-    log('warn', { code: 'BILLING_RECHARGE_FAILED', workspaceId: a.workspace_id, attemptId, reason: code });
+    await stopRecharge(tx, a, account, code, message);
     return status;
   });
+}
+
+/** A failed recharge turns auto-recharge off until the owner turns it back on, with one recharge_failed notice (keyed by the attempt). */
+async function stopRecharge(tx: DbExecutor, a: AttemptRow, account: { card_last4: string | null }, code: string, message: string | null) {
+  await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=CASE WHEN recharge_pending_attempt=${a.id} THEN NULL ELSE recharge_pending_attempt END,
+    recharge_enabled=false, recharge_disabled_reason=${code.slice(0, 100)}, recharge_disabled_at=now(), updated_at=now() WHERE workspace_id=${a.workspace_id}`);
+  const data = { attemptId: a.id, code, message: message?.slice(0, 300) ?? null, last4: a.card_last4 ?? account.card_last4 };
+  await tx.execute(sql`SELECT billing_notice(${a.workspace_id}, 'recharge_failed', ${'recharge_failed:' + a.id}, ${JSON.stringify(data)}::jsonb)`);
+  log('warn', { code: 'BILLING_RECHARGE_FAILED', workspaceId: a.workspace_id, attemptId: a.id, reason: code });
 }
 
 // ---------- customers and cards ----------
@@ -283,9 +294,9 @@ export const forgetCard = (db: Pick<DbExecutor, 'execute'>, workspaceId: string 
 export async function setAutoRecharge(runtime: Runtime, workspaceId: string, settings: AutoRechargeSettings): Promise<void> {
   stripeConfig(runtime);
   const { enabled, thresholdCents, amountCents, monthlyCapCents } = settings;
-  const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
-  if (!whole(thresholdCents, 500, 100_000) || !whole(amountCents, 2000, 1_000_000) || !whole(monthlyCapCents, amountCents, 25_000_000))
-    throw new ApiError(422, 'TOP_UP_AMOUNT_INVALID', 'Use a threshold of $5–$1,000, an amount of $20–$10,000 and a monthly limit of at least the amount, up to $250,000.');
+  const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max, limit = BILLING_LIMITS.autoRecharge;
+  if (!whole(thresholdCents, limit.minThresholdCents, limit.maxThresholdCents) || !whole(amountCents, limit.minAmountCents, limit.maxAmountCents) || !whole(monthlyCapCents, amountCents, limit.maxMonthlyCapCents))
+    throw new ApiError(422, 'TOP_UP_AMOUNT_INVALID', `Use a threshold of ${dollars(limit.minThresholdCents)}–${dollars(limit.maxThresholdCents)}, an amount of ${dollars(limit.minAmountCents)}–${dollars(limit.maxAmountCents)} and a monthly limit of at least the amount, up to ${dollars(limit.maxMonthlyCapCents)}.`);
   await runtime.db.transaction(async tx => {
     await lockAccount(tx, workspaceId);
     const [a] = await rows<{ stripe_payment_method: string | null; blocked: boolean }>(tx, sql`SELECT stripe_payment_method,
@@ -341,7 +352,6 @@ async function ensureCreditProduct(cfg: StripeConfig, productId: string): Promis
 }
 
 // ---------- top-ups ----------
-const MIN_CENTS = 2000, MAX_CENTS = 1_000_000, FIRST_MAX_CENTS = 50_000;
 function providerError(error: unknown, context: Record<string, unknown> = {}): unknown {
   if (!(error instanceof StripeError)) return error;
   log('warn', { code: 'BILLING_STRIPE_ERROR', ...context, ...stripeErrorFields(error) });
@@ -365,8 +375,8 @@ export const insertAttempt = async (tx: Pick<DbExecutor, 'execute'>, attemptId: 
 /** Validates a person's top-up and writes its attempt (state created). Serialized per workspace by the account lock. */
 async function openAttempt(runtime: Runtime, input: { workspaceId: string; kind: 'checkout' | 'saved_card' | 'setup'; amountCents: number; actor: string }) {
   const { workspaceId, kind, amountCents } = input;
-  if (kind !== 'setup' && (!Number.isInteger(amountCents) || amountCents < MIN_CENTS || amountCents > MAX_CENTS))
-    throw new ApiError(422, 'TOP_UP_AMOUNT_INVALID', 'Add between $20 and $10,000 at a time.', 'amountCents');
+  if (kind !== 'setup' && (!Number.isInteger(amountCents) || amountCents < CREDIT.minTopUpCents || amountCents > CREDIT.maxTopUpCents))
+    throw new ApiError(422, 'TOP_UP_AMOUNT_INVALID', `Add between ${dollars(CREDIT.minTopUpCents)} and ${dollars(CREDIT.maxTopUpCents)} at a time.`, 'amountCents');
   return runtime.db.transaction(async tx => {
     // Counted after the lock, in a fresh statement, so concurrent requests can't all count the same five (finding 7).
     await lockAccount(tx, workspaceId);
@@ -377,7 +387,7 @@ async function openAttempt(runtime: Runtime, input: { workspaceId: string; kind:
       EXISTS (SELECT FROM billing_blocked_cards b WHERE b.fingerprint=a.card_fingerprint) AS blocked
       FROM billing_accounts a WHERE workspace_id=${workspaceId}`);
     if (a!.hour >= 5 || a!.failed >= 3) throw new ApiError(429, 'TOP_UP_RATE_LIMITED', 'Too many payment attempts for this workspace. Try again later.', undefined, true);
-    if (kind !== 'setup' && !a!.funded && amountCents > FIRST_MAX_CENTS) throw new ApiError(409, 'FIRST_TOP_UP_LIMIT', 'The first top-up is limited to $500. Larger top-ups work after it succeeds.', 'amountCents');
+    if (kind !== 'setup' && !a!.funded && amountCents > BILLING_LIMITS.firstTopUpMaxCents) throw new ApiError(409, 'FIRST_TOP_UP_LIMIT', `The first top-up is limited to ${dollars(BILLING_LIMITS.firstTopUpMaxCents)}. Larger top-ups work after it succeeds.`, 'amountCents');
     if (kind === 'saved_card' && (!a!.stripe_payment_method || a!.blocked)) throw new ApiError(409, 'PAYMENT_METHOD_REQUIRED', 'Save a card in Settings → Billing first, or pay with Stripe Checkout.');
     const attemptId = id('bpa');
     await insertAttempt(tx, attemptId, workspaceId, kind, kind === 'setup' ? 0n : BigInt(amountCents) * UC_PER_CENT, input.actor, kind === 'saved_card' ? stripeConfig(runtime).creditProduct : null); // never a recharge: always written
@@ -800,12 +810,23 @@ export async function reconcileRefund(runtime: Runtime, refundId: string): Promi
 }
 
 // ---------- disputes and fraud warnings ----------
-/** Blocks the card behind an attempt and turns auto-recharge off. Runs inside the caller's transaction (account locked). */
+/**
+ * Blocks the card behind an attempt, forgets it as the workspace's saved card and turns auto-recharge off. Runs inside
+ * the caller's transaction (account locked). A fraud warning outranks a dispute block: only a dispute's is lifted.
+ */
 async function blockCard(tx: DbExecutor, a: AttemptRow, reason: 'dispute' | 'early_fraud_warning') {
-  if (a.card_fingerprint) await tx.execute(sql`INSERT INTO billing_blocked_cards(fingerprint, reason) VALUES (${a.card_fingerprint}, ${reason}) ON CONFLICT DO NOTHING`);
+  if (a.card_fingerprint) await tx.execute(sql`INSERT INTO billing_blocked_cards(fingerprint, reason) VALUES (${a.card_fingerprint}, ${reason})
+    ON CONFLICT (fingerprint) DO UPDATE SET reason=excluded.reason WHERE excluded.reason='early_fraud_warning'`);
   await tx.execute(sql`UPDATE billing_accounts SET recharge_enabled=false, recharge_disabled_reason=${reason}, recharge_disabled_at=now(), updated_at=now() WHERE workspace_id=${a.workspace_id}`);
+  // As forgetCard: GET /v1/billing must not offer a blocked card as the saved one.
+  if (a.card_fingerprint) await tx.execute(sql`UPDATE billing_accounts SET stripe_payment_method=NULL, card_brand=NULL, card_last4=NULL, card_exp_month=NULL, card_exp_year=NULL, card_fingerprint=NULL
+    WHERE workspace_id=${a.workspace_id} AND card_fingerprint=${a.card_fingerprint}`);
 }
-/** A dispute debits what the payment credited (at most the disputed amount), blocks the card and stops auto-recharge. */
+/**
+ * A dispute debits what the payment credited (at most the disputed amount), blocks the card and stops auto-recharge.
+ * An inquiry (warning_needs_response) takes no funds yet but is held the same way: Stripe escalates it to a chargeback
+ * without another charge.dispute.created, and closeDispute gives it back when it closes as warning_closed.
+ */
 export async function openDispute(runtime: Runtime, attemptId: string, dispute: StripeObject) {
   await runtime.db.transaction(async tx => {
     const locked = await lockAttempt(tx, attemptId);
@@ -819,16 +840,25 @@ export async function openDispute(runtime: Runtime, attemptId: string, dispute: 
     log('error', { code: 'BILLING_DISPUTE_OPENED', workspaceId: a.workspace_id, attemptId, disputeId: dispute.id, amountCents: Number(dispute.amount) || 0 });
   });
 }
-/** A won dispute gives back exactly what the dispute debited; a lost one changes nothing more. */
+/**
+ * A won dispute, or an inquiry closed without a chargeback (warning_closed: Stripe never took the funds), gives back
+ * exactly what the dispute debited and lifts the card's dispute block unless another of its disputes is open or was
+ * lost. A lost one changes nothing more.
+ */
 export async function closeDispute(runtime: Runtime, attemptId: string, dispute: StripeObject) {
-  if (dispute.status !== 'won') return;
+  if (dispute.status !== 'won' && dispute.status !== 'warning_closed') return;
   await runtime.db.transaction(async tx => {
     const locked = await lockAttempt(tx, attemptId);
     if (!locked) return;
-    const [debited] = await rows<{ paid_uc: string }>(tx, sql`SELECT paid_uc FROM billing_ledger WHERE kind='dispute' AND source_id=${'dispute:' + dispute.id}`);
-    if (!debited || BigInt(debited.paid_uc) === 0n) return;
-    await tx.execute(sql`SELECT billing_post(${locked.attempt.workspace_id}, 'dispute_reversal', ${'dispute:' + dispute.id}, ${-BigInt(debited.paid_uc)}::bigint, 0::bigint,
+    const { attempt: a } = locked, source = 'dispute:' + dispute.id;
+    const [debited] = await rows<{ paid_uc: string }>(tx, sql`SELECT paid_uc FROM billing_ledger WHERE kind='dispute' AND source_id=${source}`);
+    if (debited && BigInt(debited.paid_uc) !== 0n) await tx.execute(sql`SELECT billing_post(${a.workspace_id}, 'dispute_reversal', ${source}, ${-BigInt(debited.paid_uc)}::bigint, 0::bigint,
       ${JSON.stringify({ attemptId, disputeId: dispute.id })}::jsonb, 'stripe')`);
+    // Every dispute debit that has no reversal is one still open or lost.
+    if (a.card_fingerprint) await tx.execute(sql`DELETE FROM billing_blocked_cards b WHERE b.fingerprint=${a.card_fingerprint} AND b.reason='dispute'
+      AND NOT EXISTS (SELECT FROM billing_ledger d JOIN billing_payment_attempts p ON p.id=d.detail->>'attemptId'
+        WHERE d.kind='dispute' AND d.source_id<>${source} AND p.card_fingerprint=b.fingerprint
+          AND NOT EXISTS (SELECT FROM billing_ledger r WHERE r.kind='dispute_reversal' AND r.source_id=d.source_id))`);
   });
 }
 /** Radar's early fraud warning: block the card and stop auto-recharge. The operator decides on a refund. */

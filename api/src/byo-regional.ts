@@ -199,10 +199,14 @@ async function disconnectSummary(db:DbExecutor,c:V5Connection):Promise<Summary> 
 }
 const Cleanup=z.object({operationId:z.string(),lastError:z.object({region:z.string().nullable(),code:z.string()}).nullable(),remaining:z.array(z.object({region:z.string(),resources:Region.shape.resources})),retain:z.array(z.string()),summary:DisconnectSummary.nullable()});
 export const InventoryFields={scan:ScanView.optional(),candidates:z.array(Candidate).optional(),cleanup:Cleanup.optional()};
+// An open selection in a region that isn't ready, with no setup queued or running (it failed, ran out of attempts or was
+// never queued), will never bind: it shows as failed with the region's error until the domain is selected again.
 export async function statuses(db:DbExecutor,cid:string) {
-  const rows=(await db.execute<ScanRow & {pending:z.infer<typeof Pending>[];failed:z.infer<typeof FailedIntent>[]}>(sql`SELECT r.*,i.pending,i.failed FROM provider_connection_regions r CROSS JOIN LATERAL (SELECT
-    coalesce(jsonb_agg(jsonb_build_object('domain',i.name,'importing',i.importing,'error',j.last_error) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NULL),'[]') AS pending,
-    coalesce(jsonb_agg(jsonb_build_object('domain',i.name,'importing',i.importing,'error',i.closed_reason) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NOT NULL),'[]') AS failed
+  const rows=(await db.execute<ScanRow & {pending:z.infer<typeof Pending>[];failed:z.infer<typeof FailedIntent>[]}>(sql`SELECT r.*,i.pending,i.failed FROM provider_connection_regions r
+    LEFT JOIN jobs p ON p.id='byo.provision:'||r.connection_id||':'||r.region
+    CROSS JOIN LATERAL (SELECT r.sending_state<>'ready' AND p.status IS DISTINCT FROM 'pending' AND p.status IS DISTINCT FROM 'running' AS stuck) s CROSS JOIN LATERAL (SELECT
+    coalesce(jsonb_agg(jsonb_build_object('domain',i.name,'importing',i.importing,'error',j.last_error) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NULL AND NOT s.stuck),'[]') AS pending,
+    coalesce(jsonb_agg(jsonb_build_object('domain',i.name,'importing',i.importing,'error',coalesce(i.closed_reason,r.provision_error,p.last_error,'PROVISION_FAILED')) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NOT NULL OR s.stuck),'[]') AS failed
     FROM byo_domain_intents i LEFT JOIN jobs j ON j.id='byo.bind:'||i.id WHERE i.connection_id=r.connection_id AND i.region=r.region) i WHERE r.connection_id=${cid} ORDER BY r.region`)).rows;
   return rows.map(s=>({region:s.region,regionLabel:regionLabels[s.region]!,scanState:s.scan_state,scanError:s.scan_error,sendingState:s.sending_state,receivingState:s.receiving_state,error:s.provision_error,facts:s.scan_facts,resources:s.ownership_journal.map(({kind,resource,target,state})=>({kind,resource,target,state})),pending:s.pending,failedIntents:s.failed}));
 }
@@ -365,7 +369,9 @@ const provision=runV5(async(r,c,p,attempt)=>{
       await r.db.execute(sql`UPDATE provider_connection_regions SET provision_error=${err.code} WHERE ${owned}`);
       throw defer(30_000,{...p,generation:gen});
     }
-    await r.db.execute(sql`UPDATE provider_connection_regions SET sending_state='failed',lease_until=NULL,provision_error=${err.code} WHERE ${owned}`);
+    // Failed for good: the region's selections close with its error in the same statement, so none waits in pending.
+    await r.db.execute(sql`WITH failed AS (UPDATE provider_connection_regions SET sending_state='failed',lease_until=NULL,provision_error=${err.code} WHERE ${owned} RETURNING connection_id,region)
+      UPDATE byo_domain_intents i SET closed_reason=${err.code} FROM failed f WHERE i.connection_id=f.connection_id AND i.region=f.region AND i.closed_reason IS NULL`);
     throw err;
   }
 });

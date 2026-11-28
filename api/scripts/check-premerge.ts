@@ -253,8 +253,13 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
 // child process with the app's JSX settings), at their own sizes and at inputs a visitor might type.
 {
   const before = failed, file = 'app/src/features/pricing/compare/index.ts'
-  const { RATES, CREDIT, STORAGE_AFTER_DAYS, perThousandUsd } = await import('../src/billing/rates.js')
+  const { RATES, CREDIT, BILLING_LIMITS, STORAGE_AFTER_DAYS, dollars, perThousandUsd } = await import('../src/billing/rates.js')
   const n = (value: number) => value.toLocaleString('en-US')
+  // The Terms (section 5) state the top-up and auto-recharge limits the billing code enforces.
+  const legal = 'app/src/features/legal/content/terms.md', terms5 = readFileSync(new URL(legal, root), 'utf8'), auto = BILLING_LIMITS.autoRecharge
+  for (const quoted of [`**${dollars(CREDIT.minTopUpCents)} to ${dollars(CREDIT.maxTopUpCents)}**`, `first top-up is at most **${dollars(BILLING_LIMITS.firstTopUpMaxCents)}**`,
+    `a balance level from ${dollars(auto.minThresholdCents)} to ${dollars(auto.maxThresholdCents)}; from ${dollars(auto.minAmountCents)} to ${dollars(auto.maxAmountCents)} per recharge`, `up to ${dollars(auto.maxMonthlyCapCents)})`])
+    if (!terms5.includes(quoted)) fail('Terms', `The Terms don't say “${quoted}”, as src/billing/rates.ts has it.`, legal)
   // Written again here, apart from the pages' own code: micro-cents to dollars, half up, four places under a cent, and
   // no cents on a whole-dollar amount (the pages print "$19", "$26.50", "$0").
   const dollarsOf = (uc: bigint) => { const places = uc > 0n && uc < 1_000_000n ? 4 : 2, unit = 10n ** BigInt(8 - places), v = ((uc + unit / 2n) / unit).toString().padStart(places + 1, '0'); return '$' + n(Number(v.slice(0, -places))) + (v.slice(-places) === '00' ? '' : '.' + v.slice(-places)) }

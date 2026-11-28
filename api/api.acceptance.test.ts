@@ -22887,8 +22887,8 @@ describe('Billing: Stripe', () => {
     assert.deepEqual([(await account()).balance, (await attempt(second.attemptId)).refunded], [String(2500n * UC), '0']);
   });
 
-  test('Dispute: the disputed credit is debited, the card blocked and auto-recharge stopped; a won dispute gives it back', async t => {
-    const { runtime, db, fake, wid, deliver, account, attempt, ledger, stripe } = await stripeFixture(t);
+  test('Dispute: the disputed credit is debited, the card blocked and forgotten and auto-recharge stopped; a won dispute or a closed inquiry gives it back and lifts the block', async t => {
+    const { runtime, db, fake, wid, deliver, account, attempt, ledger, stripe, saveCard } = await stripeFixture(t);
     const top = await stripe.createCheckoutTopUp(runtime, { workspaceId: wid, amountCents: 4000, actor: 'user:fixture', billingEmail: null });
     const session = fake.payCheckout((await attempt(top.attemptId)).stripe_checkout_session);
     await deliver('checkout.session.completed', session);
@@ -22899,23 +22899,39 @@ describe('Billing: Stripe', () => {
     assert.equal((await deliver('charge.dispute.created', dispute)).body.outcome, 'processed', 'A second event for the same dispute debits nothing more.');
     assert.ok(errors.mock.calls.some(c => String(c.arguments[0]).includes('BILLING_DISPUTE_OPENED')));
     assert.deepEqual((await ledger()).map(r => [r.kind, r.paid]), [['topup', String(4000n * UC)], ['dispute', String(-4000n * UC)]]);
-    const blocked = await account();
+    const blocked = await account(), block = async () => (await db.query('SELECT reason FROM billing_blocked_cards WHERE fingerprint = $1', [fake.card.fingerprint])).rows[0]?.reason;
     assert.deepEqual([blocked.balance, blocked.recharge_enabled, blocked.recharge_disabled_reason], ['0', false, 'dispute']);
-    assert.equal((await db.query('SELECT reason FROM billing_blocked_cards WHERE fingerprint = $1', [fake.card.fingerprint])).rows[0]?.reason, 'dispute');
+    assert.deepEqual([blocked.stripe_payment_method, blocked.card_last4, blocked.card_fingerprint], [null, null, null], 'GET /v1/billing no longer shows the blocked card as saved.');
+    assert.equal(await block(), 'dispute');
     await assert.rejects(stripe.chargeSavedCardTopUp(runtime, { workspaceId: wid, amountCents: 2000, actor: 'user:fixture' }), { status: 409, code: 'PAYMENT_METHOD_REQUIRED' });
     await assert.rejects(stripe.setAutoRecharge(runtime, wid, { enabled: true, thresholdCents: 1000, amountCents: 2500, monthlyCapCents: 50_000 }), { status: 409, code: 'PAYMENT_METHOD_REQUIRED' });
+    // A second dispute on the same card keeps the block while it is open, even after the first one is won.
+    const second = { ...dispute, id: `dp_${randomUUID().replaceAll('-', '')}`, amount: 1000 };
+    await deliver('charge.dispute.created', second);
     assert.equal((await deliver('charge.dispute.closed', { ...dispute, status: 'won' })).body.outcome, 'processed');
     assert.equal((await deliver('charge.dispute.closed', { ...dispute, status: 'won' })).body.outcome, 'processed');
-    assert.deepEqual((await ledger()).map(r => r.kind), ['topup', 'dispute', 'dispute_reversal']);
-    assert.equal((await account()).balance, String(4000n * UC));
-    // Radar's early fraud warning blocks and stops auto-recharge too; a detached card is forgotten.
-    await db.query('DELETE FROM billing_blocked_cards WHERE fingerprint = $1', [fake.card.fingerprint]);
-    assert.equal((await deliver('radar.early_fraud_warning.created', { id: `issfr_${randomUUID().slice(0, 8)}`, object: 'radar.early_fraud_warning', payment_intent: session.payment_intent, fraud_type: 'made_with_stolen_card' })).body.outcome, 'processed');
-    errors.mock.restore();
-    assert.equal((await db.query('SELECT reason FROM billing_blocked_cards WHERE fingerprint = $1', [fake.card.fingerprint])).rows[0]?.reason, 'early_fraud_warning');
-    assert.equal((await account()).recharge_disabled_reason, 'early_fraud_warning');
+    assert.deepEqual((await ledger()).map(r => r.kind), ['topup', 'dispute', 'dispute', 'dispute_reversal']);
+    assert.equal(await block(), 'dispute');
+    await deliver('charge.dispute.closed', { ...second, status: 'won' });
+    assert.deepEqual([(await account()).balance, await block()], [String(4000n * UC), undefined], 'The last open dispute won: credit back and the card usable again.');
+    // An inquiry takes no funds, but is held like a dispute until it closes; warning_closed gives it back and lifts the block.
+    const inquiry = { ...dispute, id: `dp_${randomUUID().replaceAll('-', '')}`, status: 'warning_needs_response' };
+    await deliver('charge.dispute.created', inquiry);
+    assert.deepEqual([(await account()).balance, await block()], ['0', 'dispute']);
+    await deliver('charge.dispute.closed', { ...inquiry, status: 'warning_closed' });
+    assert.deepEqual([(await account()).balance, await block()], [String(4000n * UC), undefined]);
+    // A detached card is forgotten.
+    await saveCard();
     assert.equal((await deliver('payment_method.detached', fake.objects.get((await account()).stripe_payment_method)!)).body.outcome, 'processed');
     assert.deepEqual([(await account()).stripe_payment_method, (await account()).card_last4], [null, null]);
+    // Radar's early fraud warning blocks and stops auto-recharge too, and outlasts a dispute's block: winning that dispute doesn't lift it.
+    const third = { ...dispute, id: `dp_${randomUUID().replaceAll('-', '')}` };
+    await deliver('charge.dispute.created', third);
+    assert.equal((await deliver('radar.early_fraud_warning.created', { id: `issfr_${randomUUID().slice(0, 8)}`, object: 'radar.early_fraud_warning', payment_intent: session.payment_intent, fraud_type: 'made_with_stolen_card' })).body.outcome, 'processed');
+    await deliver('charge.dispute.closed', { ...third, status: 'won' });
+    errors.mock.restore();
+    assert.equal(await block(), 'early_fraud_warning');
+    assert.equal((await account()).recharge_disabled_reason, 'early_fraud_warning');
     await db.query('DELETE FROM billing_blocked_cards WHERE fingerprint = $1', [fake.card.fingerprint]);
   });
   // Review finding 1 / POC 14: runner 1's credit waits on the account lock (another money write holds it when Stripe
@@ -22981,6 +22997,31 @@ describe('Billing: Stripe', () => {
     assert.deepEqual((await recharges()).map(r => [r.status, r.failure_code]), [['failed', 'invoice_payment_intent_requires_action'], ['failed', 'customer_tax_location_invalid']]);
     assert.deepEqual([(await account()).recharge_enabled, (await account()).recharge_disabled_reason, await notices()], [false, 'customer_tax_location_invalid', 2]);
     assert.equal(fake.count(/^POST \/v1\/invoices$/), 2, 'No new invoice once auto-recharge is off.');
+  });
+
+  // A recharge Stripe charged a different amount for used to only clear the pending recharge, so the next minute charged the card again.
+  test('Auto-recharge: an amount mismatch turns it off with one notice; a payment for a closed attempt keeps its Stripe references', async t => {
+    const { runtime, db, wid, account, attempt, ledger, saveCard, stripe } = await stripeFixture(t);
+    await saveCard();
+    await stripe.setAutoRecharge(runtime, wid, { enabled: true, thresholdCents: 1000, amountCents: 2500, monthlyCapCents: 50_000 });
+    const id = 'bpa_' + randomUUID().replaceAll('-', '');
+    await db.query("INSERT INTO billing_payment_attempts(id,workspace_id,kind,status,amount_uc,idempotency_key,created_by) VALUES ($1,$2,'recharge','pending',$3,$4,'system')", [id, wid, String(2500n * UC), 'attempt:' + id]);
+    await db.query('UPDATE billing_accounts SET recharge_pending_attempt=$1 WHERE workspace_id=$2', [id, wid]);
+    const top = await stripe.createCheckoutTopUp(runtime, { workspaceId: wid, amountCents: 2000, actor: 'user:fixture', billingEmail: null });
+    await stripe.failAttempt(runtime, top.attemptId, 'checkout_expired', null, 'expired');
+    const errors = t.mock.method(console, 'error', () => {}), warnings = t.mock.method(console, 'warn', () => {});
+    try {
+      assert.equal(await stripe.creditAttempt(runtime, id, { creditCents: 2400, paymentIntent: 'pi_short' }), 'failed');
+      assert.equal(await stripe.creditAttempt(runtime, id, { creditCents: 2400, paymentIntent: 'pi_short' }), 'failed', 'A redelivery changes nothing more.');
+      const late = { creditCents: 2000, chargedCents: 2000, paymentIntent: 'pi_late', charge: 'ch_late', invoice: 'in_late', receiptUrl: 'https://pay.stripe.test/receipts/late' };
+      assert.equal(await stripe.creditAttempt(runtime, top.attemptId, late), 'expired');
+      assert.ok(errors.mock.calls.some(c => String(c.arguments[0]).includes('BILLING_LATE_PAYMENT')));
+    } finally { errors.mock.restore(); warnings.mock.restore(); }
+    const a = await account(), notices = (await db.query("SELECT data FROM billing_notices WHERE workspace_id=$1 AND kind='recharge_failed'", [wid])).rows;
+    assert.deepEqual([a.recharge_enabled, a.recharge_disabled_reason, a.recharge_pending_attempt, notices.map(n => [n.data.attemptId, n.data.code])], [false, 'amount_mismatch', null, [[id, 'amount_mismatch']]]);
+    const closed = await attempt(top.attemptId);
+    assert.deepEqual([closed.status, closed.charged_cents, closed.stripe_payment_intent, closed.stripe_charge, closed.stripe_invoice, closed.receipt_url], ['expired', 2000, 'pi_late', 'ch_late', 'in_late', 'https://pay.stripe.test/receipts/late'], 'The refund by hand has what it needs.');
+    assert.deepEqual((await ledger()).map(r => r.kind), [], 'Neither payment is credited.');
   });
 
   // Review finding 3: an hour of sends isn't settled yet; refunding it would leave the workspace in debt.
@@ -28583,7 +28624,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     const topics=new Map<string,Json>(),sets=new Map<string,Json>(),trace:{region:string;op:string}[]=[], policies:string[]=[], sessionNames:string[]=[], mailFromWrites:Json[]=[];
     const denied=()=>Object.assign(new Error('fixture denial'),{name:'AccessDenied'}), missing=()=>Object.assign(new Error('fixture missing'),{name:'NotFoundException'});
     const granted=new Set([va,west]),reviews=new Map<string,Json>(),accountRequests:Json[]=[];let denyAccountRequests=false;
-    let external='',failOnce=true,revoked:boolean|string=false,loseSubscribe=true,throttlePoll=false,failDelete=true,createdIdentity:Json|undefined,denyCleanup=false,loseSetDelete=false;
+    let external='',failOnce=true,revoked:boolean|string=false,loseSubscribe=true,throttlePoll=false,failDelete=true,createdIdentity:Json|undefined,denyCleanup=false,loseSetDelete=false,denyProvision=false;
     t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL)=>{const u=new URL(String(input));assert.match(u.hostname,/^sns\.us-east-[12]\.amazonaws\.com$/);if(u.pathname.endsWith('.pem'))return new Response(pem);const topic=topics.get(u.searchParams.get('TopicArn')!)!;topic.confirmed=true;return new Response(null);});
     t.mock.method(STSClient.prototype,'send',async function(this:InstanceType<typeof STSClient>,cmd:any){
       if(cmd.constructor.name==='GetCallerIdentityCommand')return {Account:account,Arn:`arn:aws:sts::${account}:assumed-role/Nightmail-${v5.id.slice(-20)}/nightmail-cleanup`};
@@ -28593,7 +28634,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         return {Credentials:{AccessKeyId:'v5-fixture-broker',SecretAccessKey:'fixture-only',SessionToken:'broker',Expiration:new Date(Date.now()+3600000)}};}
       assert.equal(key,'v5-fixture-broker');assert.match(cmd.input.RoleSessionName,/^nightmail-(?:scan|provision|cleanup|send|template|quota|verify|read|delete|mailfrom|account)$/);assert.equal(cmd.input.SourceIdentity,v5.id);
       assert.equal(cmd.input.DurationSeconds,900);assert.ok(cmd.input.Policy.length<=2048);policies.push(cmd.input.Policy);sessionNames.push(cmd.input.RoleSessionName);
-      if (!external || cmd.input.ExternalId!==external) throw denied();
+      if (!external || cmd.input.ExternalId!==external || denyProvision && cmd.input.RoleSessionName==='nightmail-provision') throw denied();
       return {AssumedRoleUser:{Arn:`arn:aws:sts::${account}:assumed-role/${cmd.input.RoleArn.split('/')[1]}/${cmd.input.RoleSessionName}`},Credentials:{AccessKeyId:'v5-fixture-customer',SecretAccessKey:'fixture-only',SessionToken:cmd.input.Policy,Expiration:new Date(Date.now()+900000)}};
     });
     t.mock.method(SESClient.prototype,'send',async function(this:InstanceType<typeof SESClient>,cmd:any){assert.equal(cmd.constructor.name,'DescribeActiveReceiptRuleSetCommand');trace.push({region:await this.config.region(),op:cmd.constructor.name});return {Metadata:{Name:'customer'},Rules:[{Name:'existing',Enabled:true,Actions:[{StopAction:{Scope:'RuleSet'}}]}]};});
@@ -28706,6 +28747,19 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await db.query(`INSERT INTO byo_domain_intents(connection_id,region,name,importing,id) SELECT $1,$2,'slot-'||n||'.example',true,'slot-'||n FROM generate_series(1,99) n`,[v5.id,oh]);
       try {assert.deepEqual(ok(await api('POST','/v1/domains',{name:'first.example'}),202).regions,[oh]);} finally {await db.query("DELETE FROM byo_domain_intents WHERE connection_id=$1 AND id LIKE 'slot-%'",[v5.id]);}
       ok(await select(ohId),202);assert.ok((await regionStatus(oh)).pending.some((i:Json)=>i.domain==='both.example'));
+    });
+    await t.test('a region whose setup fails for good closes its selections; one whose setup gave up shows them as failed',async()=>{
+      const domain=va+'.example',failedFor=async()=>{const s=await regionStatus(va);return [s.sendingState,s.pending,s.failedIntents.filter((i:Json)=>i.domain===domain)];};
+      ok(await select(vaId),202);denyProvision=true;
+      try {await assert.rejects(run('byo.provision',va),{code:'AWS_ACCESS_DENIED'});} finally {denyProvision=false;}
+      assert.deepEqual(await failedFor(),['failed',[],[{domain,importing:true,error:'AWS_ACCESS_DENIED'}]]);
+      assert.equal((await db.query('SELECT FROM byo_domain_intents WHERE connection_id=$1 AND region=$2 AND closed_reason IS NULL',[v5.id,va])).rowCount,0);
+      // Retries ran out (the job failed for good) with the selection still open: it shows as failed, never pending forever.
+      await db.query("UPDATE byo_domain_intents SET closed_reason=NULL WHERE connection_id=$1 AND name=$2",[v5.id,domain]);
+      await db.query("UPDATE jobs SET last_error='OPERATION_TEMPORARILY_UNAVAILABLE' WHERE id=$1",[`byo.provision:${v5.id}:${va}`]);
+      await db.query("UPDATE provider_connection_regions SET sending_state='provisioning',provision_error=NULL WHERE connection_id=$1 AND region=$2",[v5.id,va]);
+      assert.deepEqual(await failedFor(),['provisioning',[],[{domain,importing:true,error:'OPERATION_TEMPORARILY_UNAVAILABLE'}]]);
+      await db.query("UPDATE provider_connection_regions SET sending_state='failed' WHERE connection_id=$1 AND region=$2",[v5.id,va]); // Selecting it again retries.
     });
     const concurrent=await Promise.all([select(ohId,vaId),select(ohId,vaId)]);assert.equal(ok(concurrent[0]!,202).operationId,ok(concurrent[1]!,202).operationId);
     assert.equal((await db.query("SELECT FROM jobs WHERE type='byo.provision' AND workspace_id=$1",[wid])).rowCount,2);
@@ -36362,6 +36416,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ok(await local('POST', `/v1/operator/campaigns/${c.id}/release`, { reason: 'Reviewed the list source with the customer' }));
       assert.equal((await view()).state, 'sending');
       assert.equal((await db.query(`SELECT count(*)::int AS n FROM hosted_operator_audit WHERE workspace_id=$1 AND action='operator-release-campaign'`, [wid])).rows[0].n, 1);
+      // Paused before every recipient was validated: the release goes back to preparing (it used to skip to sending), and
+      // no caller can move such a campaign past preparing.
+      await db.query(`UPDATE sending_campaigns SET state='paused',paused_at=now(),total=total+50 WHERE id=$1`, [c.id]);
+      const { resumeCampaign } = await import('./src/states.js');
+      assert.equal((await runtime.db.execute(resumeCampaign({ workspaceId: wid, id: c.id }, 'sending'))).rows.length, 0);
+      ok(await local('POST', `/v1/operator/campaigns/${c.id}/release`, { reason: 'Reviewed the list source again' }));
+      assert.equal((await view()).state, 'preparing');
     });
   });
 

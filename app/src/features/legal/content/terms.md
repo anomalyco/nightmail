@@ -1,7 +1,7 @@
 ---
 title: Terms of Service
 description: The agreement between you and Anomaly for using Nightmail: accounts, prepaid billing, refunds and credit expiry, sending limits, your data, and how disputes are resolved.
-updated: 26 November 2026
+updated: 27 November 2026
 effective: 20 November 2026
 changes: abuseHolds
 ---
@@ -53,7 +53,7 @@ By creating an account, joining a workspace or using the Service, you accept the
 ### 5.1 Prepaid balance
 
 - Nightmail is **prepaid**. Each workspace has its own balance in **US dollars**. Usage is taken from the balance about once an hour.
-- You add credit with a card through Stripe. One top-up is **$20 to $10,000**, before tax. Credit is added only once Stripe confirms the payment. Stripe emails a receipt.
+- You add credit with a card through Stripe. One top-up is **$20 to $10,000**, before tax. A workspace's first top-up is at most **$500**; larger ones work once it succeeds. Credit is added only once Stripe confirms the payment. Stripe emails a receipt.
 - **Credit expires 12 months after purchase** and isn't refundable except as described in [section 5.7](#refunds-and-credit-expiry).
 - Prices exclude taxes. Where the law requires us to collect sales tax, VAT, GST or a similar tax, we add it to the charge. Otherwise, you're responsible for any taxes on your purchases.
 - There is no subscription and no monthly fee.
@@ -82,7 +82,7 @@ By creating an account, joining a workspace or using the Service, you accept the
 ### 5.4 Auto-recharge
 
 - Owners and admins can turn on auto-recharge. You then authorize us to charge your saved card the chosen amount whenever the balance falls below the chosen level.
-- Defaults: recharge **$25** when the balance falls below **$10**, at most **$500** per calendar month. You can change these (from $20 to $1,000 per recharge; a monthly cap from $20 to $10,000) or turn auto-recharge off at any time.
+- Defaults: recharge **$25** when the balance falls below **$10**, at most **$500** per calendar month. You can change these (a balance level from $5 to $1,000; from $20 to $10,000 per recharge; a monthly cap of at least the recharge amount, up to $250,000) or turn auto-recharge off at any time.
 - If a recharge is declined or needs extra authentication, auto-recharge turns off and we email the owners once. We don't retry automatically.
 - **Received mail costs money too.** Received mail is charged even if you didn't ask for it (except mail flagged as spam). A flood of mail to your addresses can trigger auto-recharge up to your monthly cap. Set a cap you're comfortable with.
 
