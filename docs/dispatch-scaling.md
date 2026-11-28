@@ -122,7 +122,7 @@ scheduling around them was the problem.
 
 Commits `be8076e` → `7f82248` on `main`.
 
-### 3.1 Batch dispatcher (`api/src/dispatcher.ts`)
+### 3.1 Batch dispatcher (`api/src/sending/dispatcher.ts`)
 - Queued `sending_emails` rows *are* the queue. No per-recipient job rows.
 - Loop per environment/region: one statement leases up to 24 due rows (`FOR UPDATE SKIP LOCKED`,
   `lease_until`), rows are prepared in memory (render, hash check, MIME), then processed in

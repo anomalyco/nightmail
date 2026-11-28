@@ -175,7 +175,7 @@ const PLACEHOLDER = /{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g;
 /** The placeholders a campaign's subject and rendered parts use: the contact properties its audience snapshot keeps. */
 export const placeholderKeys = (draft: Pick<CampaignDraft, 'subject'>, rendered: { html?: string; text?: string }) =>
   [...new Set([draft.subject, rendered.html ?? '', rendered.text ?? ''].flatMap(value => [...value.matchAll(PLACEHOLDER)].map(match => match[1]!)))];
-/** Whether the dispatcher screens a campaign's mail (dispatcher.ts prepareMail): Hosted shared sending, live, with a classifier. */
+/** Whether the dispatcher screens a campaign's mail (sending/claim.ts prepareMail): Hosted shared sending, live, with a classifier. */
 export const campaignScreened = screenedAtDispatch;
 /** The link host of a campaign's copies as its launch froze it; this installation's own origin for a review frozen before
  *  link hosts, which its screen keys were made with. Only keys and checks use that origin: delivery never does. */
@@ -324,7 +324,7 @@ export async function screenAhead(runtime: Runtime, a: Actor, row: RunRow, state
   const forms = new Map<string, Promise<CopyVerdict>>();
   const verdictOf = async (recipient: ReviewedRecipient) => {
     const keyed = screenedAs(runtime, await campaignMessage(runtime, draft, recipient, false, assets, rendered, true, !rendered.html?.includes('{{'), version), draft);
-    // The copy as the dispatcher keys it (probation senders' rewritten, src/dispatcher.ts prepareMail).
+    // The copy as the dispatcher keys it (probation senders' rewritten, src/sending/claim.ts prepareMail).
     const copy = probationCopy ? probationCopy({ ...keyed, to: [] }) : { ...keyed, to: [] };
     const size = Buffer.byteLength(copy.html ?? '') + Buffer.byteLength(copy.text ?? ''), form = await screen.copyKey(runtime, copy);
     let verdict = forms.get(form);

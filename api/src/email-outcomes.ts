@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 /**
  * The bits of sending_emails.event_outcomes: every outcome an email's events ever reported, kept even when a
  * higher-ranked status hides it (a hard bounce, then a complaint, leaves status 'complained' with the bounced bit set).
- * Feedback stamps them (src/sending/events.ts, src/dispatcher.ts) and migration 407's tally triggers count them.
+ * Feedback stamps them (src/sending/events.ts, src/sending/claim.ts) and migration 407's tally triggers count them.
  */
 export const EMAIL_OUTCOME_BITS = { accepted: 1, delivered: 2, bounced: 4, complained: 8, opened: 16, clicked: 32, failed: 64, delayed: 128 } as const;
 

@@ -157,7 +157,7 @@ async function refreshEvidence(db: DbExecutor, limit: number) {
         count(*) FILTER (WHERE delivered AND marketing)::int AS marketing_delivered,count(*) FILTER (WHERE clicked AND marketing)::int AS clicked
       FROM mail GROUP BY 1,2
     ), screen AS (
-      -- What the screen judged, by the day it judged it (src/dispatcher.ts): mail it never saw does not dilute the rate.
+      -- What the screen judged, by the day it judged it (src/sending/claim.ts): mail it never saw does not dilute the rate.
       SELECT d.workspace_id,(v.hour AT TIME ZONE 'UTC')::date AS day,sum(v.screened)::int AS screened,sum(v.rejected)::int AS rejected FROM due d JOIN hosted_screen_hourly v ON v.workspace_id=d.workspace_id
         AND v.hour>=date_trunc('day',now(),'UTC')-CASE WHEN d.evidence_at IS NULL THEN interval '30 days' ELSE interval '7 days' END GROUP BY 1,2
     ), unsub AS (
@@ -265,7 +265,7 @@ async function candidates(runtime: Runtime, limit: number, only?: string) {
           'marketingBounces',coalesce(sum(h.marketing_bounces) FILTER (WHERE h.hour>=date_trunc('hour',now(),'UTC')-interval '167 hours'),0),
           'marketingComplaints',coalesce(sum(h.marketing_complaints) FILTER (WHERE h.hour>=date_trunc('hour',now(),'UTC')-interval '167 hours'),0)))
         FROM hosted_health_hourly h WHERE h.workspace_id=c.workspace_id AND h.epoch=coalesce(pc.resumed_at,'-infinity') AND h.hour>=date_trunc('hour',now(),'UTC')-interval '191 hours') AS win,
-      -- Screen verdicts in the current epoch, counted when the dispatcher's screen judged the mail (src/dispatcher.ts).
+      -- Screen verdicts in the current epoch, counted when the dispatcher's screen judged the mail (src/sending/claim.ts).
       (SELECT json_build_object('screened',coalesce(sum(v.screened),0),'rejected',coalesce(sum(v.rejected),0)) FROM hosted_screen_hourly v
         WHERE v.workspace_id=c.workspace_id AND v.epoch=coalesce(pc.resumed_at,'-infinity') AND v.hour>=date_trunc('hour',now(),'UTC')-interval '23 hours') AS screen
     FROM c JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared'`)).rows;

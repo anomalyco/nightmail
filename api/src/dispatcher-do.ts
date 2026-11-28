@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Pool } from 'pg';
-import { shardsForRate, TARGET_SHARD_RATE, type GateState } from './dispatcher.js';
+import { shardsForRate, TARGET_SHARD_RATE, type GateState } from './sending/quota.js';
 export { shardsForRate, TARGET_SHARD_RATE };
 import type { Runtime } from './core/types.js';
 import { InboxWaiters, serveInboxWake } from './inbox-wake.js';
@@ -8,9 +8,9 @@ import { InboxWaiters, serveInboxWake } from './inbox-wake.js';
 function initDeps() {
   return Promise.all([
     import('pg'), import('drizzle-orm/node-postgres'), import('drizzle-orm/sql'),
-    import('./config.js'), import('./adapters/storage.js'), import('./dispatcher.js'),
+    import('./config.js'), import('./adapters/storage.js'), import('./sending/quota.js'), import('./sending/dispatcher.js'),
     import('./core/errors.js'), import('./log.js'), import('./adapters/feedback-queue.js'), import('./health-counters.js'), import('./screen-shadow.js'),
-  ]).then(([{ Pool }, { drizzle }, { sql }, { loadConfig }, { r2Storage }, { initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize }, { ApiError, logError, platformMessage }, { log, setLogContext }, { feedbackSink, workWake }, { countersDue, flushCounters }, { enqueueShadow }]) => ({
+  ]).then(([{ Pool }, { drizzle }, { sql }, { loadConfig }, { r2Storage }, { initialGate, shardLeaseSize }, { runDispatcher, dispatchWakeKey }, { ApiError, logError, platformMessage }, { log, setLogContext }, { feedbackSink, workWake }, { countersDue, flushCounters }, { enqueueShadow }]) => ({
     Pool, drizzle, sql, loadConfig, r2Storage, initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize, ApiError, log, logError, platformMessage, setLogContext, feedbackSink, workWake, countersDue, flushCounters, enqueueShadow,
   }));
 }

@@ -2,7 +2,7 @@ import { setTimeout } from 'node:timers/promises';
 import { Client } from 'pg';
 import { nodeLogFacetLane, nodeRuntime, postgresConnection } from './adapters/node.js';
 import { drain,drainJobs } from './dispatch.js';
-import { refreshPoolQuotas, type GateState } from './dispatcher.js';
+import { refreshPoolQuotas, type GateState } from './sending/quota.js';
 import { refreshDeliverabilitySources } from './glass-deliverability.js';
 import { jobConcurrency } from './jobs.js';
 import { hourlyUpkeep, retentionTick } from './maintenance.js';

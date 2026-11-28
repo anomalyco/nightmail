@@ -345,7 +345,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // A brand-new region has no previous allowance to preserve. Keep its normal cold-start
   // buffer and Hosted admission checks; the first dispatch populates its quota cache.
   if ((row.quotaCheckedAt !== null || max > 0 || row.waitingReason === 'ses_daily_quota') && !(refreshAt > dbNow)) {
-    const { campaignQuota } = await wrapModuleLoad(() => import('../dispatcher.js'));
+    const { campaignQuota } = await wrapModuleLoad(() => import('../sending/quota.js'));
     const q = await campaignQuota(runtime, a, row.review.draft.region, row.account?.aws_account_id).catch(error => { if (error instanceof ModuleLoadError) throw error; return null; });
     if (!q) return hold('ses_daily_quota', new Date(dbNow + QUOTA_REFRESH_MS).toISOString());
     max = q.max24HourSend; sent = q.sentLast24Hours; customerSent = q.customerSent ?? 0; refreshAt = q.checkedAt + QUOTA_REFRESH_MS;

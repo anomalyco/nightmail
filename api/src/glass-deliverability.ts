@@ -213,7 +213,7 @@ export async function refreshDeliverabilitySources(runtime: Runtime, { fetch: ge
         ON CONFLICT (kind,subject) DO UPDATE SET next_at=excluded.next_at WHERE c.next_at<=now() RETURNING c.kind,c.subject,c.next_at)
       SELECT c.kind,c.subject,w.account,c.next_at::text AS lease FROM claimed c JOIN wanted w USING (kind,subject) ORDER BY c.kind='vdm',c.kind,c.subject`);
     if (!rows.length) return;
-    const { loadDispatchTransport, poolSes } = await import('./dispatcher.js');
+    const { loadDispatchTransport, poolSes } = await import('./sending/quota.js');
     let transport: Awaited<ReturnType<typeof loadDispatchTransport>> | undefined, google: Promise<string> | undefined;
     for (const row of rows) {
       let status = 'ok', detail: Record<string, unknown> | null = null;

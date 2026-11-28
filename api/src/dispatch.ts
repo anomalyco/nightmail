@@ -4,10 +4,10 @@ import { log } from './log.js';
 import type { Runtime, JobHandler } from './core/types.js';
 import { sendingConnections } from './domain-claims.js';
 import { processJobs, wakeWebhooks } from './jobs.js';
-import type { GateState } from './dispatcher.js';
+import type { GateState } from './sending/quota.js';
 import { finishCampaigns, terminalColumns, terminalEvents } from './states.js';
 import { isDeletableUploadKey } from './storage-keys.js';
-const loadDispatcher = lazyModule(() => import('./dispatcher.js'));
+const loadDispatcher = lazyModule(() => Promise.all([import('./sending/quota.js'), import('./sending/dispatcher.js')]));
 export const deleteAttachment: JobHandler = async (runtime, payload, job) => {
   if (typeof payload.key !== 'string') throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Attachment deletion job is missing its object key.');
   const key = payload.key;
@@ -116,7 +116,7 @@ export async function drain(runtime: Runtime, limit = 20, concurrency = 2, maxDu
   let processed = await drainJobs(runtime, limit, concurrency, maxDurationMs,pool);
   const partitions = await dispatchPartitions(runtime, recoverInterrupted);
   if (!partitions.length) return processed;
-  const { initialGate, runDispatcher } = await loadDispatcher();
+  const [{ initialGate }, { runDispatcher }] = await loadDispatcher();
   const dispatch = async ({ accountId, region }: Partition) => {
     const key = `${accountId ? `${accountId}:` : ''}${region}`;
     const gate = gates.get(key) ?? initialGate(); gates.set(key, gate);

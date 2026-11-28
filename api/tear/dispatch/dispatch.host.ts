@@ -79,7 +79,7 @@ const [
   { nodeRuntime },
   { createApp },
   { sql },
-  { runDispatcher, initialGate },
+  { runDispatcher }, { initialGate },
   { dispatchPartitions, drainJobs },
   { SESv2Client },
   { ensureRegionSettings },
@@ -87,13 +87,13 @@ const [
   import("../../src/adapters/node.ts"),
   import("../../src/app.ts"),
   import("drizzle-orm"),
-  import("../../src/dispatcher.ts"),
+  import("../../src/sending/dispatcher.ts"), import("../../src/sending/quota.ts"),
   import("../../src/dispatch.ts"),
   import("@aws-sdk/client-sesv2"),
   import("../../src/ses-region-state.ts"),
 ]);
 
-type GateState = import("../../src/dispatcher.ts").GateState;
+type GateState = import("../../src/sending/quota.ts").GateState;
 type Runtime = import("../../src/core/types.ts").Runtime;
 
 const { runtime } = nodeRuntime(env);

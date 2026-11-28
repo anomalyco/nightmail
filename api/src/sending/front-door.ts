@@ -80,7 +80,7 @@ function structuredSnapshot(input:SendRequest & {region:string}):EmailSnapshot {
   const unsubHeaders = input.unsubscribe && input.kind === 'transactional' ? [{ Name: 'List-Unsubscribe', Value: `<${input.unsubscribe.url}>` }, { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' }] : [];
   return { testCampaignId: null, untrustedContent: !!input.headers?.some(h => h.name.toLowerCase() === 'in-reply-to'), from: input.from, ...(input.fromName !== undefined ? { fromName: input.fromName } : {}), to: Array.isArray(input.to) ? input.to : [input.to], cc: input.cc, bcc: input.bcc, replyTo: input.replyTo, region: input.region, kind: input.kind, subject: input.subject ?? '', html: input.html, text: input.text, attachments: input.attachments, tracking: input.tracking ?? input.kind === 'marketing', headers: [...(input.headers ?? []).map(header => ({ Name: header.name, Value: header.value })), ...unsubHeaders], ...(input.screen && input.kind === 'transactional' ? { screen: true } : {}), ...(input.topicId && input.kind === 'marketing' ? { topicId: input.topicId } : {}) };
 }
-// The dispatcher screens Hosted shared mail on a live installation with a classifier (dispatcher.ts prepareMail).
+// The dispatcher screens Hosted shared mail on a live installation with a classifier (sending/claim.ts prepareMail).
 // Admission measures what that screen would read and refuses, with the numbers, what it would refuse, instead of
 // accepting mail that is rejected later; the dispatcher's own check stays as a backstop. Bring-your-own AWS mail with
 // screen: true is screened at dispatch, as before.

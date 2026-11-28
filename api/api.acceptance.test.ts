@@ -3499,7 +3499,7 @@ test('mail gateway: SMTP queues dispatchable content with a single database conn
     ['large text','Content-Type: text/plain\r\n\r\n'+('t'.repeat(998)+'\r\n').repeat(600)],
   ] as const) await t.test(label,async()=>{
     const res=await submit(mime),body=await res.json() as Json;assert.equal(res.status,200,JSON.stringify(body));
-    await (await import('./src/dispatcher.js')).dispatchDue(rt,REGION);
+    await (await import('./src/sending/dispatcher.js')).dispatchDue(rt,REGION);
     // The full harness also has a runner: it may already hold this message's lease.
     for(const until=Date.now()+5000;;){
       const {rows:[mail]}=await db.query('SELECT attempt_started_at,error_code FROM sending_emails WHERE id=$1 AND actor_key_id=$2',[body.id,kid]);
@@ -8720,7 +8720,7 @@ describe('Hosted MCP OAuth and tools', () => {
   // write under way on it and then see what it changed.
   test('endpoint writers: a confirm and the dispatcher’s forward check wait for a write under way on the endpoint, then see it', async t => {
     const [{ nodeRuntime }, { answerForward }, { forwardStillAllowed }, { encrypt }, { digest }, { sql }] = await Promise.all([import('./src/adapters/node.js'),
-      import('./src/endpoints.js'), import('./src/dispatcher.js'), import('./src/webhooks/crypto.js'), import('./src/core/http.js'), import('drizzle-orm')]);
+      import('./src/endpoints.js'), import('./src/sending/claim.js'), import('./src/webhooks/crypto.js'), import('./src/core/http.js'), import('drizzle-orm')]);
     const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL }); cleanup(t, close);
     const db = await fixtureDatabase(t), w = unique('endpoint-locks');
     cleanup(t, async () => {
@@ -9290,7 +9290,7 @@ describe('Hosted MCP OAuth and tools', () => {
   // earlier claim group was sending still dispatched the later groups.
   test('single-tenant dispatch rereads an MCP grant in each claim: one revoked during an earlier group stops the next', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       assert.equal(runtime.config.multiTenant, false);
       const grant = 'mcp_' + (await oauthGrant(t, db, writableScope, request)).consentId, ids: string[] = [];
       for (let i = 0; i < 2; i++) ids.push(ok(await local('POST', '/v1/emails/send', mail()), 202).id);
@@ -14256,7 +14256,7 @@ describe('Hosted MCP OAuth and tools', () => {
       const { token,consentId } = await oauthGrant(t, db, `${writableScope} bane:live`, request);
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
       const { SESv2Client, GetAccountCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { mailMessages, mailAttachments } = await import('./src/db/mailbox.js');
       const { attachToMailboxes } = await import('./src/mailbox-store.js');
       const scope = { workspaceId: runtime.config.workspaceId }, topic = `arn:aws:sns:${REGION}:111122223333:inbound-test`;
@@ -14506,7 +14506,7 @@ describe('Hosted MCP OAuth and tools', () => {
 describe('DB region catalog and explicit SES setup', () => {
   test('MOCK AWS TRANSPORT: catalog changes are immediate, discovery is read-only, and provisioning is explicit and idempotent', async t => {
     const [{ createApp }, { nodeRuntime }, { drizzle }, { drainJobs }, { dispatchDue }, ses, sns, sts, { regionalLimits }] = await Promise.all([
-      import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/dispatch.js'), import('./src/dispatcher.js'),
+      import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/dispatch.js'), import('./src/sending/dispatcher.js'),
       import('@aws-sdk/client-sesv2'), import('@aws-sdk/client-sns'), import('@aws-sdk/client-sts'), import('./src/db/sending.js'),
     ]);
     const db = await fixtureDatabase(t);
@@ -21174,7 +21174,7 @@ describe('Dashboard API capabilities', () => {
   test('sender score: the evaluation may be all marketing: a new workspace\'s first campaign goes out and ten identical notices in a batch are admitted; a score\'s limit keeps its transactional reserve', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request, run, jobs }) => {
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { refreshStanding } = await import('./src/standing.js');
       const wid = runtime.config.workspaceId, acct = '112223330041', domain = 'first-newsletter.invalid', from = `news@${domain}`;
       Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture', secretAccessKey: 'fixture' } });
@@ -26049,7 +26049,7 @@ async function simulatedSesFixture(t: TestContext, scenario: (fixture: {
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(new URL(FIXTURE_DATABASE_URL!).hostname), 'Simulated SES fixtures require an isolated local database.');
   const [{ createApp }, { nodeRuntime }, { drizzle }, { jobHandlers }, { operationJobs }, { ensureRegionSettings }, { dispatchDue }, { JobDeferred }, { newsletterJobs }] = await Promise.all([
     import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/sending/jobs.js'),
-    import('./src/webhooks/operations.js'), import('./src/ses-region-state.js'), import('./src/dispatcher.js'), import('./src/jobs.js'), import('./src/newsletters.js'),
+    import('./src/webhooks/operations.js'), import('./src/ses-region-state.js'), import('./src/sending/dispatcher.js'), import('./src/jobs.js'), import('./src/newsletters.js'),
   ]);
   const db = await fixtureDatabase(t);
   const instance = nodeRuntime({ DATABASE_URL: FIXTURE_DATABASE_URL, BANE_ROOT_SECRET: AUTH_SECRET,
@@ -26677,7 +26677,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
     assert.equal((await db.query(`UPDATE provider_connections SET paused_at=NULL,pause_reason=NULL WHERE kind='shared' AND pause_reason=$1`,['fixture hold'])).rowCount,1);
     assert.equal((await db.query(`SELECT FROM provider_connections WHERE resumed_at IS NOT NULL`)).rowCount,0);
     const sent=ok(await api('POST','/v1/emails/send',{from:'sender@'+names[0],to:'success@simulator.amazonses.com',subject:'Cutover fixture',text:'Simulated transport'}),202);
-    const {runDispatcher}=await import('./src/dispatcher.js');await runDispatcher(runtime,{region:r,accountId:dest,lanes:1});assert.equal(sends,1);
+    const {runDispatcher}=await import('./src/sending/dispatcher.js');await runDispatcher(runtime,{region:r,accountId:dest,lanes:1});assert.equal(sends,1);
     assert.deepEqual((await db.query('SELECT provider_id,feedback_topic_arn,status FROM sending_emails WHERE id=$1',[sent.id])).rows,[{provider_id:'fixture-new-send',feedback_topic_arn:topic(dest),status:'accepted'}]);
     const envelope=async(fields:Record<string,string>)=>{
       const body={...fields,SigningCertURL:certUrl,SignatureVersion:'2',Signature:Buffer.from(sign('RSA-SHA256',Buffer.from(Object.entries(fields).map(([k,v])=>`${k}\n${v}\n`).join('')),privateKey)).toString('base64')};
@@ -26816,7 +26816,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         return specifier === 'cloudflare:workers' ? { shortCircuit:true, url:'data:text/javascript,export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env}} export class WorkerEntrypoint {constructor(ctx,env){this.ctx=ctx;this.env=env}}' } : next(specifier, context);
       } });
       const { DispatcherShard, shardsForRate, TARGET_SHARD_RATE } = await import('./src/dispatcher-do.js').finally(() => hook.deregister());
-      const { shardLeaseSize } = await import('./src/dispatcher.js');
+      const { shardLeaseSize } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       assert.equal(TARGET_SHARD_RATE, 25);
       assert.deepEqual([shardsForRate(14), shardsForRate(50), shardsForRate(200), shardsForRate(1000), shardsForRate(null, 8)], [1, 2, 8, 40, 8]);
@@ -26871,7 +26871,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('mail room holds pre-deploy verdictless rows for screenHeldMail; sweep retries on outage, sends clean rows and rejects spam with email.rejected webhook; refused suppression frees idempotency key', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => t.test('synthetic transports', async t => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { screenHeldMail } = await import('./src/sending/held-screen.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const wid = runtime.config.workspaceId, acct = '112223330006', origin = 'https://screen.synthetic.invalid', topic = `arn:aws:sns:${REGION}:${acct}:fixture`;
@@ -26976,7 +26976,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('mid-batch stop interleaves owners across sendConcurrency chunks while keeping transactional first', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { runDispatcher, initialGate, interleaveByOwner } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js'), { interleaveByOwner } = await import('./src/sending/claim.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       // Pure helper check: transactional stays first; marketing alternates owners; offset rotates start owner.
       const sample = [
@@ -27025,7 +27025,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // lease, claim, send, record and the next lease, which found nothing and ended the run.
   test('a dispatcher lease that passes the last owner wraps to the first, so a run never stops with mail due', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       // A region of its own: this workspace is its only owner, so a one-row lease's cursor is
       // the last owner, exactly as with 24 owners and the normal 24-row lease.
       const region = 'te-cursor-1', status = async (ids: string[]) => (await db.query('SELECT status FROM sending_emails WHERE id=ANY($1) ORDER BY id', [ids])).rows.map(r => r.status);
@@ -27055,7 +27055,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // that re-armed the Durable Object at once).
   test('a lease the marketing allowance cannot afford ends the run as a quota hold in a bounded number of statements', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       const { sesDailyReserve } = await import('./src/sending/schemas.js');
       const region = 'te-allowance-1', w = runtime.config.workspaceId, percent = runtime.config.dispatch.dailyHeadroomPercent;
       // 24 owners (one lease's worth), each with one two-recipient marketing envelope.
@@ -27124,7 +27124,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // the specific envelopes the allowance cannot afford, and a batch that advanced nothing ends.
   test('the allowance skips specific unaffordable envelopes: one owner\'s full page holds, and mail behind oversized heads sends', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { sesDailyReserve } = await import('./src/sending/schemas.js');
       const w = runtime.config.workspaceId, percent = runtime.config.dispatch.dailyHeadroomPercent, max = 100;
       const template = ok(await local('POST', '/v1/emails/send', mail()), 202).id, contacts = [address(), address()];
@@ -28048,7 +28048,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX regional delivery: legacy backfill, closest claim, mixed batch and frozen dispatch',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>{
-      const {readFile}=await import('node:fs/promises'),{runDispatcher}=await import('./src/dispatcher.js');
+      const {readFile}=await import('node:fs/promises'),{runDispatcher}=await import('./src/sending/dispatcher.js');
       const {GetAccountCommand,SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='111122223333',oh='us-east-2',va='us-east-1',byo=unique('byo');
       const old=`arn:aws:sns:${oh}:${acct}:bane-feedback`,trusted=`arn:aws:sns:${va}:${acct}:bane-trusted-feedback`;
@@ -28171,7 +28171,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('built-in domain: given on creation and by the backfill, unique and never a reserved name, sends within its caps and scope, receives into a catch-all inbox, refused when paused or revoked',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,request,run})=>t.test('synthetic transports',async t=>{
       const [{runDispatcher},{SESv2Client,GetAccountCommand,SendEmailCommand,GetEmailIdentityCommand,CreateTenantResourceAssociationCommand,DeleteTenantResourceAssociationCommand},builtin,{onboardNewUser,ownerName},{acceptInboundNotification,mailboxIngestJobs},{storeIncoming},{ingestInput},{matchRouting},{sql},{render}]=await Promise.all([
-        import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/workspaces.js'),import('./src/mailbox-ingest.js'),import('./src/mailbox-ingest-store.js'),
+        import('./src/sending/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/workspaces.js'),import('./src/mailbox-ingest.js'),import('./src/mailbox-ingest-store.js'),
         import('./src/mailbox-ingest-input.js'),import('./src/routing-match.js'),import('drizzle-orm'),import(new URL('../infra/aws-shared/runtime-policies.mjs',import.meta.url).href)]);
       const wid=runtime.config.workspaceId,acct='111122225555',oh='us-east-2',parent='nightmail-fixture.email',topic=`arn:aws:sns:${oh}:${acct}:bane-feedback`;
       const inbound=`arn:aws:sns:${oh}:${acct}:bane-inbound`,bucket='builtin-fixture-mail',screenOrigin='https://screen.builtin.invalid';
@@ -28669,7 +28669,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('built-in domain: a send while the domain is still being set up, by its job as well as by the request that made the workspace, is held until it is ready and then queued once; a setup that stopped is refused plainly',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>t.test('synthetic transports',async t=>{
       const [{runDispatcher},{SESv2Client,GetAccountCommand,GetEmailIdentityCommand,CreateTenantResourceAssociationCommand,SendEmailCommand},builtin]=await Promise.all([
-        import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js')]);
+        import('./src/sending/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js')]);
       const wid=runtime.config.workspaceId,acct='111122227777',oh='us-east-2',parent='nightmail-fixture.email',topic=`arn:aws:sns:${oh}:${acct}:bane-feedback`;
       Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:true,aws:{accessKeyId:'fixture-setup-hold',secretAccessKey:'fixture-only'},builtinDomain:parent,builtinScope:'members',platformAccount:undefined,hostedScreen:false,screen:undefined});
       await db.query(`UPDATE ses_installation_settings SET default_region=$2,enabled_regions=jsonb_build_array($2::text) WHERE workspace_id=$1`,[wid,oh]);
@@ -28734,7 +28734,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('built-in domain breaker: all built-in mail over 5% permanent bounces or 0.1% complaints, even without its worst workspace, stops every built-in domain sending, not receiving, pages the reputation channel, and stays tripped until an operator resets it; one workspace alone only alerts',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>t.test('synthetic transports',async t=>{
       const [{runDispatcher},{SESv2Client,GetAccountCommand,GetEmailIdentityCommand,CreateTenantResourceAssociationCommand,SendEmailCommand},builtin,{reputationAlertJobs},{JobDeferred}]=await Promise.all([
-        import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/reputation-alerts.js'),import('./src/jobs.js')]);
+        import('./src/sending/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/reputation-alerts.js'),import('./src/jobs.js')]);
       const wid=runtime.config.workspaceId,acct='111122225555',oh='us-east-2',parent='nightmail-fixture.email',topic=`arn:aws:sns:${oh}:${acct}:bane-feedback`;
       Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture-only'},builtinDomain:parent,builtinScope:'anyone',
         platformAccount:undefined,reputationAlertUrl:'https://hooks.slack.invalid/builtin-breaker',hostedScreen:false,screen:undefined});
@@ -29170,7 +29170,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       // Keep the envelope invisible to the independent simulated runner until THIS mocked
       // customer's regional dispatcher has recorded the provider response.
       const previous=runtime.db;try {await (await import('drizzle-orm/node-postgres')).drizzle(db).transaction(async tx=>{runtime.db=tx;
-      const {dispatchDue}=await import('./src/dispatcher.js');const scoped={...runtime,config:{...runtime.config,workspaceId:wid,regions:[oh,va]}};
+      const {dispatchDue}=await import('./src/sending/dispatcher.js');const scoped={...runtime,config:{...runtime.config,workspaceId:wid,regions:[oh,va]}};
       const sendSubject=(subject:string)=>api('POST','/v1/emails/send',{from:'pilot@sub.both.example',to:'success@simulator.amazonses.com',template:{name:'bane-pilot',data:{subject}}});
       error(await sendSubject('Fixture\rSender: x@evil'),422,'INVALID_RENDERED_MIME');
       error(await sendSubject('Fixture\r\nContent-Type: text/html'),422,'INVALID_RENDERED_MIME');
@@ -30796,7 +30796,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         assert.ok(cmd instanceof SendEmailCommand);assert.deepEqual(cmd.input.Destination?.ToAddresses,['success@simulator.amazonses.com']);
         sends++;return {MessageId:randomUUID()};
       });
-      const {runDispatcher}=await import('./src/dispatcher.js');
+      const {runDispatcher}=await import('./src/sending/dispatcher.js');
       await runDispatcher(runtime,{region:REGION,accountId:account,lanes:1});
       assert.equal(sends,1);assert.equal((await db.query('SELECT status FROM sending_emails WHERE workspace_id=$1 AND campaign_id=$2',[wid,c.id])).rows[0].status,'accepted');
       assert.deepEqual((await db.query(`SELECT a->>'used' AS used,a->>'marketingDayCap' AS marketing,hosted_minute_cap($1) AS burst,w.pending_cap_override,w.exempt_hosted_quotas FROM hosted_allowance_read($1,1,1,100,1000,10000,10) h(a) CROSS JOIN workspaces w WHERE w.id=$1`,[wid])).rows,
@@ -31081,7 +31081,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
       const { checkHostedHealth } = await import('./src/maintenance.js');
       const { resumeHostedSending } = await import('./src/states.js');
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       const { createMailbox } = await import('./src/mailbox-store.js');
       const wid = runtime.config.workspaceId, pool = '111122223333', domain = 'guard.example', from = `sender@${domain}`;
       // A limit of 100 for a workspace the standing job has not seen (the evaluation's is 500) keeps the counts below small.
@@ -31224,7 +31224,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('MX review: screen verdicts count when the screen judges, so spam queued before a resume pauses; simulator-only mail and unperformed screens do not dilute', async t => {
     // A subtest owns the classifier stub, so its tracker resets before the fixture's network guard (as the screen benchmark does).
     await simulatedSesFixture(t, async ({ runtime, local, db }) => t.test('synthetic classifier', async t => {
-      const { checkHostedHealth } = await import('./src/maintenance.js'), { runDispatcher } = await import('./src/dispatcher.js');
+      const { checkHostedHealth } = await import('./src/maintenance.js'), { runDispatcher } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const f = await hostedHoldFixture(runtime, db);
       await db.query('UPDATE workspaces SET send_cap_override=200000 WHERE id=$1', [f.wid]); // No limit or burst cap in the way (an exempt workspace is never paused).
@@ -31322,7 +31322,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('MX review round 2: a marketing hold keeps already-queued marketing queued at dispatch while transactional mail sends', async t => {
     await simulatedSesFixture(t, async ({ db, runtime, local }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js'), { pauseHostedSending } = await import('./src/states.js'), { sql } = await import('drizzle-orm');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { pauseHostedSending } = await import('./src/states.js'), { sql } = await import('drizzle-orm');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const f = await hostedHoldFixture(runtime, db);
       await db.query('UPDATE workspaces SET send_cap_override=100000 WHERE id=$1', [f.wid]);
@@ -31410,7 +31410,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const send = (kind: 'marketing' | 'transactional') => local('POST', '/v1/emails/send', { from: 'news@second.example', to: 'reader@example.net', subject: 'Hello', text: 'Fixture', kind }, 'live', { 'X-Bane-Workspace': other });
       await db.query(`UPDATE provider_connections SET pool_tenant_name='bane-probation-second' WHERE id=$1`, [other]);
       await db.query(`UPDATE provider_connection_regions SET tenant_state='ready' WHERE connection_id=$1`, [other]);
-      const { runDispatcher } = await import('./src/dispatcher.js'), { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       t.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => cmd instanceof GetAccountCommand ? { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } } : { MessageId: randomUUID() });
       // Review round 3: a sibling's transactional mail queued before the sponsor's full pause stays queued (it used to send).
       const queued = ok(await send('transactional'), 202).id;
@@ -31625,7 +31625,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX: an operator lifts a bounce suppression in Nightmail and SES, scoped, audited and fenced, so a fixed sign-in address gets mail again', async t => {
     await simulatedSesFixture(t, async ({runtime,db,local}) => {
-      const {liftSuppression}=await import('./scripts/lift-suppression.js'),{runDispatcher}=await import('./src/dispatcher.js');
+      const {liftSuppression}=await import('./scripts/lift-suppression.js'),{runDispatcher}=await import('./src/sending/dispatcher.js');
       const wid=runtime.config.workspaceId, account='111122223333', domain='lift.example', to='New.Hire@Example.net';
       const second=REGION==='us-east-2'?'us-east-1':'us-east-2', trusted=`bane-trusted-${wid}`;
       Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture-platform',secretAccessKey:'fixture-only'}});
@@ -31719,7 +31719,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     ['answers without a MessageId','SES_MESSAGE_ID_MISSING',()=>({})],
   ] as const) test(`MX: when SES ${answer}, the dispatcher holds queued mail instead of failing all of it as acceptance_unknown`, async t => {
     await simulatedSesFixture(t, async ({runtime,db,local}) => {
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       const wid=runtime.config.workspaceId, account='111122223333', domain='outage.example';
       Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture-platform',secretAccessKey:'fixture-only'}});
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`,[REGION,account,`arn:aws:sns:${REGION}:${account}:feedback`]);
@@ -32446,7 +32446,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run, jobs }) => {
       const { SESv2Client, GetAccountCommand, SendEmailCommand, GetEmailTemplateCommand, TestRenderEmailTemplateCommand } = await import('@aws-sdk/client-sesv2');
       const { STSClient, AssumeRoleCommand } = await import('@aws-sdk/client-sts');
-      const { runDispatcher } = await import('./src/dispatcher.js'), { dispatchPartitions } = await import('./src/dispatch.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { dispatchPartitions } = await import('./src/dispatch.js');
       const { ingestFeedbackBatch } = await import('./src/ses/feedback.js'), { setupResources } = await import('./src/ses-setup.js');
       const shared = runtime.config.workspaceId, byo = unique('customer'), pool = '111122223333', account = '444455556666', externalId = randomUUID();
       const poolTopic = `arn:aws:sns:${REGION}:${pool}:bane-feedback`, byoTopic = `arn:aws:sns:${REGION}:${account}:${setupResources(byo).topicName}`;
@@ -32536,7 +32536,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('sending review benchmark: attachment preflight, exhausted burst and classifier outage',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330001',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       // Precharge, lease, dispatch and both EXPLAINs measure one quota minute, even across a wall-clock rollover.
       // Only statement_timestamp is pinned; leases, classifier latency and the benchmark timer still use real time.
@@ -32619,7 +32619,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('hosted screen records: a line per classifier request and per email sent or deferred, with timings and no content',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330002',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       const key=ok(await local('POST','/v1/api-keys',{name:'records',permissions:['send','read']}),201);
       Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{ primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'classifier-fixture-key', model: 'fixture', threshold: 0.7 } }});
@@ -32661,7 +32661,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('content_screen_calls: a row per classifier request, answered or failed, with no content; a failed row write never stops a send',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330004',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       const key=ok(await local('POST','/v1/api-keys',{name:'calls',permissions:['send','read']}),201);
       Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{ primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'classifier-fixture-key', model: 'fixture', threshold: 0.7 } }});
@@ -33162,7 +33162,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // A subtest, as the other classifier scenarios: a fetch mock on the fixture's own context would be restored over the
     // fixture's and leak into later tests.
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('probation copy',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml,screenedText}=await import('./src/screened-html.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml,screenedText}=await import('./src/screened-html.js');
       const wid=runtime.config.workspaceId,acct='112223330003',origin='https://screen.synthetic.invalid';
       runtime.config.hostedSendCaps.firstWeek=10000;
       const key=ok(await local('POST','/v1/api-keys',{name:'screened copy',permissions:['send','read']}),201);
@@ -33248,7 +33248,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('mail apps on probation: a file goes out as what its bytes are under its own name, a label is never refused, and what no label makes safe is refused in a reply that names the file',async t=>{
     // A subtest, as the other classifier scenarios, so its fetch mock is lifted before the fixture's own.
     await simulatedSesFixture(t,async({runtime,db,local,fetch})=>t.test('mail app files',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330041',origin='https://screen.synthetic.invalid',gatewayToken=randomUUID()+randomUUID();
       runtime.config.hostedSendCaps.firstWeek=10000;
       const key=ok(await local('POST','/v1/api-keys',{name:'mail app',permissions:['send'],domains:['app.invalid']}),201);secrets.add(key.secret);
@@ -33331,7 +33331,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('probation follows standing: in good standing a responsive email goes out as written and is screened whole, hidden and escaped copy included, under the picture rules every sender keeps; a new, growing or capped sender gets the screened copy',async t=>{
     // A subtest, as the other classifier scenarios, so its fetch mock is lifted before the fixture's own.
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('standing copy',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml}=await import('./src/screened-html.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml}=await import('./src/screened-html.js');
       const wid=runtime.config.workspaceId,acct='112223330021',origin='https://screen.synthetic.invalid';
       const key=ok(await local('POST','/v1/api-keys',{name:'standing copy',permissions:['send','read']}),201), auth={authorization:`Bearer ${key.secret}`};
       Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{ primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'fixture', model: 'fixture', threshold: 0.7 } }});
@@ -33510,7 +33510,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // Campaigns through the public routes, the campaign job and the dispatcher, against hostedScreenFixture.
   async function campaignHarness(runtime: import('./src/core/types.js').Runtime, db: pg.Client, local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>,
     run: (type: string) => Promise<void>, jobs: (type: string) => Promise<Json[]>, wid: string, acct: string, from: string) {
-    const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+    const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
     const campaign = async (name: string, html: string, contacts: Record<string, unknown>[], extra: Json = {}) => {
       const list = ok(await local('POST', '/v1/lists', { name }), 201), tag = unique('c');
       await db.query(`WITH a AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent,properties) SELECT $3||'-'||o,$1,$3||'-'||o||'@example.net','subscribed',p
@@ -33919,7 +33919,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('hosted screen 451/5xx/timeout failover, accept-and-hold on dual outage, bounded sweep scaling and backlog log', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifiers', async t => {
       const { loadConfig } = await import('./src/config.js'), { screenHeldMail } = await import('./src/sending/held-screen.js');
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const acct = '112223330029', { wid, delivered } = await hostedScreenFixture(t, runtime, db, acct, 'outage-hold.invalid');
       const config = loadConfig({ BANE_ROOT_SECRET: AUTH_SECRET, PUBLIC_URL: PUBLIC_ORIGIN, TYPESAFE_API_KEY: 'fixture',
         JEV_ENDPOINT: runtime.config.screen!.jev.endpoint, JEV_MODEL: 'outage-hold-fixture', JEVF_API_KEY: 'jevf-fixture-key', JEVF_ENDPOINT: JEVF_URL });
@@ -34186,7 +34186,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('second classifier slow, down, rate limited, answering garbage or hanging past its deadline: the same mail goes out under the same verdicts and no later, nothing is retried, and what became of each repeat is kept', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifiers', async t => {
-      const [{ enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }, { drizzle }, { runDispatcher, initialGate }, { SESv2Client, GetAccountCommand }] = await Promise.all([import('./src/screen-shadow.js'), import('drizzle-orm/node-postgres'), import('./src/dispatcher.js'), import('@aws-sdk/client-sesv2')]);
+      const [{ enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }, { drizzle }, { runDispatcher }, { initialGate }, { SESv2Client, GetAccountCommand }] = await Promise.all([import('./src/screen-shadow.js'), import('drizzle-orm/node-postgres'), import('./src/sending/dispatcher.js'), import('./src/sending/quota.js'), import('@aws-sdk/client-sesv2')]);
       const acct = '112223330022', { wid } = await hostedScreenFixture(t, runtime, db, acct, 'unmoved.invalid');
       // As on Cloudflare: the run puts its requests on the second classifier's queue and the queue's consumer asks, on
       // connections of its own (the fixture's one connection is a transaction in use). Its rows are committed, and
@@ -34702,7 +34702,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('sending review benchmark: bounded lease across queued owners',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       const owners=BENCH?5000:1000;
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
         SELECT 'q'||i,'owner'||(i%${owners}),'xx-test-1','fixture','a@example.invalid','[]','[]','[]','fixture','{"kind":"transactional"}',true FROM generate_series(1,${3*owners})i;ANALYZE sending_emails`);
@@ -34724,7 +34724,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('dispatch claim: stays on the primary key when the statistics were taken with nothing queued',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {runDispatcher}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher}=await import('./src/sending/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const f=await hostedHoldFixture(runtime,db);
       t.mock.method(SESv2Client.prototype,'send',async(cmd:any)=>cmd instanceof GetAccountCommand?{SendingEnabled:true,SendQuota:{MaxSendRate:1000,Max24HourSend:100000,SentLast24Hours:0}}:{MessageId:randomUUID()});
       // Autovacuum analyzes the table between sends, while nothing is queued, so the statistics say every queued-only partial
@@ -36444,7 +36444,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       runtime.config.support = support;
       assert.deepEqual(Object.keys(after.sending.previous), ['accepted', 'marketing', 'delivered', 'bounced', 'complained']);
       // The minute tick samples the quiet region's quota (the simulated SES's), and leaves the fresh one alone.
-      const { refreshPoolQuotas } = await import('./src/dispatcher.js');
+      const { refreshPoolQuotas } = await import('./src/sending/quota.js');
       await refreshPoolQuotas(runtime);
       const sampled = await readGlass(runtime);
       assert.deepEqual([sesRegion(sampled, region)!.maxSendRate, sesRegion(sampled, quiet)!.maxSendRate !== null, sesRegion(sampled, quiet)!.checkedAt !== null], [14, true, true]);
@@ -36944,7 +36944,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query('UPDATE sending_campaigns SET probe_cleared_at=now() WHERE id=$1', [c.id]); // A clean list; the probe is tested above.
       await run('campaign.run');
       assert.deepEqual(await shown(), ['sending', 30, 0, 30]);
-      // The dispatcher pauses a campaign it cannot verify even with everyone released (dispatcher.ts rejectPreflight). Queued
+      // The dispatcher pauses a campaign it cannot verify even with everyone released (sending/claim.ts rejectPreflight). Queued
       // mail still dispatches while it is paused, and the dispatcher finishes only a sending campaign.
       await db.query(`UPDATE sending_campaigns SET state='paused',paused_at=now(),pause_reason='{"code":"CAMPAIGN_HASH_FORMAT_UNSUPPORTED","message":"Paused."}' WHERE id=$1`, [c.id]);
       await db.query(`UPDATE sending_emails SET status='delivered',provider_id='settles-'||id WHERE campaign_id=$1 AND status='queued'`, [c.id]);
@@ -37730,7 +37730,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // under their own narrow origin; a forged one (an event that does not exist) is still canceled.
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
         SELECT 'email_forged_notice',workspace_id,region,'standing:stev_forged',from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated FROM sending_emails WHERE workspace_id=$1`, [platform]);
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       await runDispatcher(runtime, { region: REGION, accountId: pool });
       const outcome = Object.fromEntries((await db.query(`SELECT id,status,error_code FROM sending_emails WHERE workspace_id=$1`, [platform])).rows.map(r => [r.id === 'email_forged_notice' ? 'forged' : 'notice', [r.status, r.error_code]]));
       assert.ok(['accepted', 'sent', 'delivered'].includes(outcome.notice[0]) && outcome.notice[1] === null, JSON.stringify(outcome));
@@ -38081,7 +38081,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // It dispatches under its own origin, as a standing notice does; nothing else may use that origin.
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
         SELECT 'email_forged_account_notice',workspace_id,region,'notice:ant_forged',from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated FROM sending_emails WHERE id=$1`, [invitation.id]);
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       await runDispatcher(runtime, { region: REGION, accountId: pool });
       const outcome = Object.fromEntries((await db.query(`SELECT id,status,error_code FROM sending_emails WHERE workspace_id=$1 AND id=ANY($2)`, [platform, [invitation.id, 'email_forged_account_notice']])).rows.map(r => [r.id === invitation.id ? 'notice' : 'forged', [r.status, r.error_code]]));
       assert.ok(['accepted', 'sent', 'delivered'].includes(outcome.notice[0]) && outcome.notice[1] === null, JSON.stringify(outcome));
@@ -38729,7 +38729,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         return Reflect.apply(send,this,[cmd]);
       });
       const queries=t.mock.method(db,'query');
-      const result=await (await import('./src/dispatcher.js')).dispatchDue(runtime,REGION);
+      const result=await (await import('./src/sending/dispatcher.js')).dispatchDue(runtime,REGION);
       const leases=queries.mock.calls.filter(c=>(c.arguments[0] as any)?.text?.includes('queued_owners'));
       assert.ok(leases.length);let leased=0;
       for(const entry of leases){
@@ -38742,7 +38742,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('query budget: API key admission, dispatch, acceptance and delivery at one and 100 envelopes',async t=>{
     await simulatedSesFixture(t,async({db,runtime,local})=>{
-      const {runDispatcher}=await import('./src/dispatcher.js'),{ingestFeedbackBatch}=await import('./src/ses/feedback.js');
+      const {runDispatcher}=await import('./src/sending/dispatcher.js'),{ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       const wid=runtime.config.workspaceId,acct='112223330000',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       const key=ok(await local('POST','/v1/api-keys',{name:'budget',permissions:['send','read']}),201);
       runtime.config.multiTenant=true;
@@ -39011,7 +39011,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('MX: 100 emails across 100 workspaces share account-scoped quota and bounded dispatcher statements', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       const accounts=['111122223333','444455556666']; runtime.config.multiTenant=true; runtime.config.simulatedSes.latencyMs=15;
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES ($1,$2,'ready',$3)`,[REGION,accounts[0],`arn:aws:sns:${REGION}:${accounts[0]}:bane-feedback`]);
       await db.query("INSERT INTO workspaces(id,name,slug) SELECT 'bench-'||n,'fixture','bench-'||n FROM generate_series(1,100)n");
@@ -39074,7 +39074,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
       const { SESv2Client, GetAccountCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { acceptInboundNotification, mailboxIngestJobs } = await import('./src/mailbox-ingest.js');
       const { mailboxEventJobs } = await import('./src/mailbox-events.js');
       const scope = runtime.config.workspaceId, topic = `arn:aws:sns:${REGION}:111122223333:fixture`;
@@ -43995,7 +43995,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const hookId=(await db.query("SELECT id AS hook_id FROM mailbox_webhooks WHERE workspace_id=$1 AND key=$2 AND type='forward' AND verified",[wid,'team'])).rows[0].hook_id;await call('PUT',root,config);
         const send=async(mid:string)=>{const row=(await db.query("SELECT id FROM mailbox_webhook_deliveries WHERE webhook_id=$1 AND payload->>'messageId'=$2",[hookId,mid])).rows[0];await mailboxEventJobs['mailbox.webhook'](runtime,{deliveryId:row.id},{id:row.id,workspaceId:wid,attempts:1});return row.id};
         const m=await ingest('forward-handler',[box.address]);await send(m.id);await send(m.id);const rows=(await db.query("SELECT from_address,from_name,text FROM mail_messages WHERE workspace_id=$1 AND direction='outbound' AND subject='Fwd: Test forward-handler'",[wid])).rows;assert.equal(rows.length,1);assert.equal(rows[0].from_address,box.address);assert.match(rows[0].from_name,/ via /);
-        await (await import('./src/dispatcher.js')).dispatchDue(runtime,REGION);
+        await (await import('./src/sending/dispatcher.js')).dispatchDue(runtime,REGION);
         assert.equal((await db.query('SELECT e.status FROM sending_emails e JOIN mail_forward_once f ON f.email_id=e.id WHERE f.message_id=$1 AND f.endpoint=$2',[m.id,hookId])).rows[0].status,'accepted');
         // No daily forwarding budget: a forward is a send and its admission applies the workspace's limits. 1,000 forwards
         // today and 999 this hour (the former 1,000 a day and 200 an hour) still forward; the endpoint's 1,000th in an hour is its last.
@@ -44101,7 +44101,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const emailId=(await db.query('SELECT email_id FROM mail_forward_once WHERE message_id=$1 AND endpoint=$2',[messageId,hookId])).rows[0].email_id as string;
         const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),send=SESv2Client.prototype.send,sends:Json[]=[];
         it.mock.method(SESv2Client.prototype,'send',async function(this:unknown,cmd:unknown,...rest:unknown[]){if(cmd instanceof SendEmailCommand)sends.push(cmd.input);return (send as (...a:unknown[])=>unknown).call(this,cmd,...rest);});
-        await (await import('./src/dispatcher.js')).dispatchDue(runtime,REGION);
+        await (await import('./src/sending/dispatcher.js')).dispatchDue(runtime,REGION);
         return sends.filter(s=>s.EmailTags.some((tag:Json)=>tag.Name==='bane_email_id'&&tag.Value===emailId));
       };
       const forwarded:{mime?:string}={};
@@ -45028,7 +45028,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { SESv2Client, GetAccountCommand, GetEmailIdentityCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
       const { acceptInboundNotification, mailboxIngestJobs } = await import('./src/mailbox-ingest.js');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const scope = runtime.config.workspaceId, topic = `arn:aws:sns:${REGION}:111122223333:inbound-fixture`;
       const domainId = unique('domain'), publicAddress = 'support@example.com', address = 'support@inbox.example.com';
       runtime.config.aws = { accessKeyId: 'synthetic-fixture', secretAccessKey: 'synthetic-fixture' }; runtime.config.liveEnabled = true;
@@ -46284,7 +46284,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('the pacing gate spaces slots evenly at the quota times the rate factor and brakes to the quota after throttling', async () => {
-    const { initialGate, reserve, brake, shardRate,shardLeaseSize } = await import('./src/dispatcher.js');
+    const { initialGate, reserve, brake, shardRate,shardLeaseSize } = await import('./src/sending/quota.js');
     assert.deepEqual([shardLeaseSize(14,8),shardLeaseSize(50,8),shardLeaseSize(200,8),shardLeaseSize(1000,8)],[6,12,24,24]);
     const gate = initialGate();
     gate.quota = { maxSendRate: 20, max24HourSend: -1, sentLast24Hours: 0, checkedAt: Date.now() };
@@ -46306,7 +46306,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.equal(shardRate(gate, undefined, pacing), 22, 'The brake releases after its window.');
     // Split 429 brake: marketing throttling brakes only marketing to (1 - txReservePercent) of raw quota and yields 1 s,
     // without touching transactional rate or clock.
-    const { marketingShardRate } = await import('./src/dispatcher.js');
+    const { marketingShardRate } = await import('./src/sending/quota.js');
     const g2 = initialGate();
     g2.quota = { maxSendRate: 200, max24HourSend: -1, sentLast24Hours: 0, checkedAt: Date.now() };
     const p2 = { rateFactor: 1.05, txReservePercent: 15, live: true } as const;
@@ -46322,7 +46322,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('transactional mail wins the next lease ahead of older non-campaign marketing', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const contact = ok(await local('POST', '/v1/contacts', { email: address() }), 201);
       ok(await local('POST', `/v1/contacts/${contact.id}/consent`, { status: 'subscribed', source: 'fixture', policyVersion: 'v1', evidence: 'Synthetic fixture.', occurredAt: new Date().toISOString() }));
       const marketing = ok(await local('POST', '/v1/emails/send', mail({ to: contact.email, kind: 'marketing' })), 202);
@@ -46339,7 +46339,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('transactional mail across workspaces leases strictly before marketing even behind ownerCursor, and marketing shares round-robin', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const pool = '111122229999', wsTx = 'ws_a_tx', wsM1 = 'ws_m_one', wsM2 = 'ws_m_two';
       Object.assign(runtime.config, { multiTenant: true });
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state) VALUES ($1,$2,$3,'ready') ON CONFLICT DO NOTHING`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:feedback`]);
@@ -46384,7 +46384,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a burst-blocked transactional backlog does not stall another workspace\'s marketing on the live-MX path', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const pool = '111122228888', wsBlocked = 'ws_a_frozen', wsMkt = 'ws_z_mkt';
       Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, hostedScreen: false, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
@@ -46426,7 +46426,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a transactional admission borrows one slot from an already leased campaign', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
-      const { runDispatcher, dispatchWakeKey } = await import('./src/dispatcher.js');
+      const { runDispatcher, dispatchWakeKey } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const list = ok(await local('POST', '/v1/lists', { name: unique('priority') }), 201);
       const size=BENCH?24:7; // Six claimed, at least one still leased; the first three slots establish borrowing and repayment.
@@ -46478,7 +46478,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a low-rate shard returns queued work instead of holding attempts behind a 50-recipient envelope', async t => {
     await simulatedSesFixture(t, async ({runtime,local,db}) => {
-      const {dispatchDue,initialGate}=await import('./src/dispatcher.js');
+      const {dispatchDue} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       runtime.config.simulatedSes.maxSendRate=1;
       const big=ok(await local('POST','/v1/emails/send',mail({to:Array.from({length:50},(_,i)=>`bulk-${i}@example.net`)})),202);
       await db.query("UPDATE sending_emails SET created_at=now()-interval '1 hour' WHERE id=$1",[big.id]);
@@ -46498,7 +46498,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Fixture',occurredAt:new Date().toISOString()}));
       ok(await local('POST','/v1/emails/batch',{emails:[1,2].map(()=>mail({to:contact.email,kind:'marketing'}))}),202);
       const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'), orig=SESv2Client.prototype.send;
-      const {dispatchWakeKey}=await import('./src/dispatcher.js'), priorityWake=new EventTarget();
+      const {dispatchWakeKey}=await import('./src/sending/dispatcher.js'), priorityWake=new EventTarget();
       runtime.dispatch=async (region,account,_count,_kind,priority)=>{if(priority)priorityWake.dispatchEvent(new Event(dispatchWakeKey(region,account)));};
       let startedSend!:()=>void; const first=new Promise<void>(r=>{startedSend=r;});
       t.mock.method(SESv2Client.prototype,'send',function(this:InstanceType<typeof SESv2Client>,cmd:any){if(cmd instanceof SendEmailCommand)startedSend(); return Reflect.apply(orig,this,[cmd]);});
@@ -46513,7 +46513,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a definitive daily denial and a known uncalled sibling survive an interrupted-attempt sweep', async t => {
     await simulatedSesFixture(t,async({runtime,local,db,run})=>{
-      const {dispatchDue}=await import('./src/dispatcher.js'), {dispatchPartitions}=await import('./src/dispatch.js');
+      const {dispatchDue}=await import('./src/sending/dispatcher.js'), {dispatchPartitions}=await import('./src/dispatch.js');
       const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2');
       runtime.config.simulatedSes.maxSendRate=4;
       const list=ok(await local('POST','/v1/lists',{name:unique('late-denial')}),201);
@@ -46542,7 +46542,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a host ahead of Postgres cannot refill a spent daily sample or spin quota alarms', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       ok(await local('POST', '/v1/emails/send', mail()), 202);
       const { rows: [sample] } = await db.query(`INSERT INTO sending_region_limits(workspace_id,region,max_send_rate,max_24_hour_send,sent_last_24_hours,checked_at)
         VALUES($1,$2,100,100,99,clock_timestamp()) ON CONFLICT(workspace_id,region) DO UPDATE SET max_send_rate=100,max_24_hour_send=100,sent_last_24_hours=99,checked_at=clock_timestamp() RETURNING checked_at`,[runtime.config.workspaceId,REGION]);
@@ -46558,7 +46558,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a stale quota sample is refreshed before the send; a shard that loses the refresh waits for the winner', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const send = SESv2Client.prototype.send, visible: boolean[] = []; let pending: string;
       t.mock.method(SESv2Client.prototype,'send',async function(this: InstanceType<typeof SESv2Client>, cmd: any) {
@@ -46588,7 +46588,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a fast provider ID is visible while its claimed sibling is still waiting for SES', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const fast = ok(await local('POST','/v1/emails/send',mail()),202).id;
       const slow = ok(await local('POST','/v1/emails/send',mail()),202).id;
@@ -46616,7 +46616,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a daily denial holds the shard until the next sample, even when SES usage lags', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const contact = ok(await local('POST','/v1/contacts',{email:address()}),201);
       ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Fixture',occurredAt:new Date().toISOString()}));
@@ -46645,7 +46645,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('MX shard leases wait for fresh quota before claiming against old or thin daily headroom', async t => {
     await simulatedSesFixture(t, async ({runtime, local, db}) => {
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const ws=runtime.config.workspaceId, accountId='111122223333';
       const ids=[ok(await local('POST','/v1/emails/send',mail()),202).id,ok(await local('POST','/v1/emails/send',mail()),202).id];
@@ -46675,7 +46675,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('exhausted shard gives marketing back immediately and the last shared credits belong to the first shards', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js'), ws=runtime.config.workspaceId;
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js'), ws=runtime.config.workspaceId;
       const contact=ok(await local('POST','/v1/contacts',{email:address()}),201);
       ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Fixture',occurredAt:new Date().toISOString()}));
       ok(await local('POST','/v1/emails/batch',{emails:Array.from({length:9},()=>mail({to:contact.email,kind:'marketing'}))}),202);
@@ -46697,7 +46697,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('rolling daily headroom holds a sending campaign, admits transactional recipients and drains after quota refresh', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const gate = initialGate(), opts = { gate, lanes: 2, batchSize: 6, quotaRefreshMs: 650 };
       const list = ok(await local('POST', '/v1/lists', { name: unique('rolling-quota') }), 201);
@@ -46752,7 +46752,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // may use half its daily SES limit by default. A first-party workspace (exempt) and an outside one share a pool account.
   async function customerShareFixture(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client) {
     const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2'), { ensureRegionSettings } = await import('./src/ses-region-state.js');
-    const { runDispatcher } = await import('./src/dispatcher.js');
+    const { runDispatcher } = await import('./src/sending/dispatcher.js');
     const pool = '111122224444', customer = runtime.config.workspaceId, ours = unique('first-party');
     Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state) VALUES ($1,$2,$3,'ready')`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:feedback`]);
@@ -49217,7 +49217,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('SES account pauses expire only continuously held mail and clear on recovery',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),{dispatchDue,initialGate}=await import('./src/dispatcher.js');
+      const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),{dispatchDue} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       const original=SESv2Client.prototype.send;let sends=0,paused=true;
       const gate=initialGate();
       t.mock.method(SESv2Client.prototype,'send',function(this:InstanceType<typeof SESv2Client>,cmd:any){
@@ -49876,7 +49876,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('query budget: immutable campaign preparation, release, dispatch and storage per recipient',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>{
-      const {jobHandlers}=await import('./src/sending/jobs.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/dispatcher.js');
+      const {jobHandlers}=await import('./src/sending/jobs.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/sending/dispatcher.js');
       const ws=runtime.config.workspaceId,n=100,bytes=Buffer.from('fixture'),attachments:string[]=[];
       runtime.feedback={enqueue:async()=>{}};runtime.storage={put:async()=>{},get:async()=>({body:bytes,contentType:'text/plain'}),delete:async()=>{}};
       for(let i=0;i<20;i++)attachments.push(ok(await local('POST','/v1/attachments',{filename:`file${i}.txt`,content:bytes.toString('base64')}),201).id);
@@ -49911,7 +49911,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('launching and completing a campaign is bounded in statements and job rows', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const { jobHandlers } = await import('./src/sending/jobs.js');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { JobDeferred } = await import('./src/jobs.js');
       const ws = runtime.config.workspaceId;
       const recipients=BENCH?2000:240;
@@ -50124,7 +50124,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('eight dispatch shards at 170ms synthetic SES latency measure per-shard capacity',async t=>{
     const db=await fixtureDatabase(t),wid=unique('bench-capacity'),region='ap-south-2';
-    const [{nodeRuntime},{runDispatcher}]=await Promise.all([import('./src/adapters/node.js'),import('./src/dispatcher.js')]);
+    const [{nodeRuntime},{runDispatcher}]=await Promise.all([import('./src/adapters/node.js'),import('./src/sending/dispatcher.js')]);
     const instances=Array.from({length:8},()=>nodeRuntime({...process.env,DATABASE_URL:FIXTURE_DATABASE_URL,ENABLE_LIVE_SES:'false'}));
     try {
       await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)',[wid]);
@@ -50155,7 +50155,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('four dispatcher shards on separate connections drain one campaign concurrently without serializing on its row', async t => {
     const db = await fixtureDatabase(t);
     const key = await keyFixture(t);
-    const [{ nodeRuntime }, { jobHandlers }, { runDispatcher }, pg] = await Promise.all([import('./src/adapters/node.js'), import('./src/sending/jobs.js'), import('./src/dispatcher.js'), import('pg')]);
+    const [{ nodeRuntime }, { jobHandlers }, { runDispatcher }, pg] = await Promise.all([import('./src/adapters/node.js'), import('./src/sending/jobs.js'), import('./src/sending/dispatcher.js'), import('pg')]);
     const list = await resource(t, key.secret, '/v1/lists', { name: unique('shards') });
     const ws = list.workspaceId, tag = unique('shard');
     const recipients = BENCH ? 2000 : 480; // Five full leases per shard, before the competing runner.
@@ -51209,7 +51209,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('dispatch wake-ups: attachment mail waiting out a storage outage, and mail a busy claim gave back, wake the shard when due; only a live storage read ends the outage', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const [{ SESv2Client, GetAccountCommand }, { dispatchDue, initialGate }, { PgDialect }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/dispatcher.js'), import('drizzle-orm/pg-core')]);
+      const [{ SESv2Client, GetAccountCommand }, { dispatchDue }, { initialGate }, { PgDialect }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/sending/dispatcher.js'), import('./src/sending/quota.js'), import('drizzle-orm/pg-core')]);
       let sends = 0;
       t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
         if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } };
@@ -51266,7 +51266,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('SES quota: a failed GetAccount holds the refresh election for seconds, a shard with a recent sample keeps sending on it, and a cold shard says when to try again', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
-      const { campaignQuota, dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { campaignQuota, initialGate } = await import('./src/sending/quota.js'), { dispatchDue } = await import('./src/sending/dispatcher.js');
       let quotaDown = true, sends = 0;
       t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
         if (!(command instanceof GetAccountCommand)) { sends++; return { MessageId: unique('accepted') }; }
@@ -51333,7 +51333,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('MOCK JEV TRANSPORT: screened live transactional spam is rejected before SES, clean and unscreened mail sends, and an outage fails open', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
       const [{ SESv2Client, SendEmailCommand, GetAccountCommand }, { dispatchDue }, { credentialFingerprint, discoveryTarget }, { loadConfig }] = await Promise.all([
-        import('@aws-sdk/client-sesv2'), import('./src/dispatcher.js'), import('./src/ses-region-state.js'), import('./src/config.js'),
+        import('@aws-sdk/client-sesv2'), import('./src/sending/dispatcher.js'), import('./src/ses-region-state.js'), import('./src/config.js'),
       ]);
       const base = { BANE_ROOT_SECRET: AUTH_SECRET, PUBLIC_URL: PUBLIC_ORIGIN };
       assert.throws(()=>loadConfig({...base,MULTI_TENANT:'true',ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google',ENABLE_LIVE_SES:'true',BANE_HOSTED_SCREEN:'true'}),/requires TYPESAFE_API_KEY/);
@@ -51661,7 +51661,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           throw new Error('Unexpected fetch in dispatcher test: ' + url);
         };
         const [{ createApp }, { DispatcherShard }, { runDispatcher }, { dispatchPartitions }, { loadConfig }, { digest }, { ModuleLoadError }] = await Promise.all([
-          import(mod('src/app.js')), import(mod('src/dispatcher-do.js')), import(mod('src/dispatcher.js')), import(mod('src/dispatch.js')), import(mod('src/config.js')), import(mod('src/core/http.js')), import(mod('src/core/errors.js')),
+          import(mod('src/app.js')), import(mod('src/dispatcher-do.js')), import(mod('src/sending/dispatcher.js')), import(mod('src/dispatch.js')), import(mod('src/config.js')), import(mod('src/core/http.js')), import(mod('src/core/errors.js')),
         ]);
         assert.equal([...loadedModules].some(u => u.includes('client-sesv2')), false, 'SESv2 SDK must stay unloaded before dispatch.');
         const client = new pg.Client({ connectionString: dbUrl });

@@ -19,7 +19,7 @@
     "label": "lc-3-unsubscribed-not-suppressed",
     "rule": "lifecycle.pre-release-suppression-wins",
     "checker": "campaign-lifecycle",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/claim.ts",
     "old": "WHERE d.email_id=x.id AND cause.reason IS NOT NULL ORDER BY d.n LIMIT 1",
     "neu": "WHERE false ORDER BY d.n LIMIT 1"
   },

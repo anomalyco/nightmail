@@ -356,7 +356,7 @@ export function renderedMimeHeaders(block:string) {
 export type ContentRules = 'probation' | 'standard' | null;
 /**
  * How one message is screened and delivered, decided the same at accept (screenOutgoingAtAccept), for held mail
- * (screenHeldMail), for a campaign's copies (campaignRules) and at dispatch (dispatcher.ts prepareMail). `hosted`: shared
+ * (screenHeldMail), for a campaign's copies (campaignRules) and at dispatch (sending/claim.ts prepareMail). `hosted`: shared
  * sending with the Hosted screen on. `trusted`: the trusted pool tier, never for a built-in domain's mail, which gets a
  * new sender's rules whatever the connection's tier. `screened`: the classifier reads it; `required`: a verdict must
  * exist before it is sent.
@@ -457,7 +457,7 @@ function evictAttachments(bytes: number) {
 registerMemoryCache({ bytes: () => attachmentCache.bytes, evict: evictAttachments });
 const attachmentLoads = new WeakMap<Storage, Map<string, Promise<Uint8Array>>>();
 /** Object storage threw on a read (R2 or S3 down or timing out), as opposed to answering without the object. Retryable:
- *  the dispatcher holds a shard's attachment mail together until it is back (src/dispatcher.ts STORAGE_MS). */
+ *  the dispatcher holds a shard's attachment mail together until it is back (src/sending/quota.ts STORAGE_MS). */
 let liveReads = 0;
 /** How many attachment reads storage has answered in this isolate (not served from the cache): a dispatcher batch whose
  *  count moved knows storage is back. */

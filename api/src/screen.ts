@@ -105,7 +105,7 @@ function host(value: string) {
   try { return new URL(value.startsWith('//') ? 'https:'+value : value).hostname.toLowerCase(); } catch { return ''; }
 }
 // ----- What style sheets draw ------------------------------------------------------------------------------------------
-// A sender off probation keeps its markup (src/dispatcher.ts prepareMail), so its screen reads what CSS can put on screen
+// A sender off probation keeps its markup (src/sending/claim.ts prepareMail), so its screen reads what CSS can put on screen
 // in any media query or color scheme: the strings its declarations draw (generated content, quotes, list markers,
 // counter-style symbols, custom properties), with var() and attr() resolved; the hosts its url()s and imports load; and
 // elements a client hides by default (style, script, title, xml) that a rule or their own style may display. CSS is read
@@ -367,7 +367,7 @@ async function body(snapshot: EmailSnapshot, limitBytes: number, scope: 'message
 // successful primary requests 1 in 10 (CAMPAIGN_SAMPLE, the line says sampleRate), since a campaign can make 50 a second. Each
 // line kept is also kept as a content_screen_calls row (src/screen-calls.ts), written after the send, never before it.
 /** Where a classifier request came from, for its line: IDs and routing only. The screen writes back how the last request
- *  ended (outcome) and how long it took (ms), for the email's own record (src/dispatcher.ts DISPATCH_EMAIL). */
+ *  ended (outcome) and how long it took (ms), for the email's own record (src/sending/dispatcher.ts DISPATCH_EMAIL). */
 export type ScreenCall = { emailId?: string; workspaceId?: string; campaignId?: string; region?: string; shard?: number; kind?: string; required?: boolean; outcome?: string; ms?: number;
   /** With the second classifier on (src/screen-shadow.ts): the first 32 characters of the message's verdict cache key, for
    *  its DISPATCH_EMAIL line (a longer run is redacted there as credential-like), so an email served from the cache links
