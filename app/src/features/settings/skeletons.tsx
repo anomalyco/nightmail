@@ -1,5 +1,6 @@
 import { Button, Checkbox, ControlSkeleton, FieldSkeleton, LoadingRegion, PageHeader, SectionHeader, Skeleton, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn } from '../../components/ui'
 import { useRegion, useWorkspaceAccess } from '../../data/context'
+import { MailSection } from '../docs/mail-settings'
 import './settings.css'
 import './domain-records.css'
 import './api-keys.css'
@@ -172,6 +173,18 @@ export function DomainDetailSkeleton() {
       <div className="domain-records-fold__skeleton" aria-hidden="true"><Skeleton width="100%" height={44} /></div>
       <div className="domain-records-fold__desktop"><div className="domain-records-actions"><ControlSkeleton width={128} /><ControlSkeleton width={104} /></div><div className="domain-records-list"><TableSkeleton className="domain-records ui-table--two-line" columns={settingsColumns.dns} rows={multiTenant ? 6 : 4} /><div className="domain-records-add"><SkeletonText width={176} /></div></div></div>
     </section></div>
+  </LoadingRegion>
+}
+
+// SMTP & IMAP as it loads: both sections' settings (they come with the session, so they are the page's own) and the
+// app passwords table under IMAP's, so nothing moves when they arrive.
+export function SmtpImapRouteSkeleton() {
+  return <LoadingRegion className="stack" label="Loading SMTP and IMAP">
+    <PageHeader title="SMTP & IMAP" />
+    <div className="keys-sections">
+      <section className="section stack"><SectionHeader title="SMTP" /><MailSection kind="smtp" /></section>
+      <section className="section stack"><SectionHeader title="IMAP" /><MailSection kind="imap" /><TableSkeleton className="keys-table ui-table--two-line" columns={settingsColumns.keys.filter(column => column.key !== 'type')} rows={3} /></section>
+    </div>
   </LoadingRegion>
 }
 

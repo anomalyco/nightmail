@@ -8,7 +8,7 @@ import { useDebounced } from '../../lib/pagination'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useApi, useApiDef, useApiMutation } from '../../data/context'
 import { invalidate } from '../../data/invalidation'
-import { useMailServers } from '../docs/mail-settings'
+import { SmtpUsername, useMailServers } from '../docs/mail-settings'
 import { queries } from '../../data/queries'
 import type { ApiKey, ApiKeyInput, ApiKeyUpdate, AppPasswordInput, AppPasswordProtocol, Inbox, KeyPermission, MailPermission, PageRequest } from '../../data/types'
 import { accessLabel } from './key-labels'
@@ -51,14 +51,17 @@ export type CreatedSecret = { secret: string; title: string; description?: strin
 export function CreateKeyDialog({ open, onOpenChange, onCreated, initial }: { open: boolean; onOpenChange: (open: boolean) => void; onCreated: (created: CreatedSecret) => void; initial?: { purpose?: Purpose; domain?: string; smtp?: boolean; app?: boolean } }) {
   // SMTP needs the installation's mail gateway: without one, fall back to the API key form.
   const servers = useMailServers()
-  const [kind, setKind] = useState<Kind>(initial?.smtp && servers ? 'smtp' : initial?.app ? 'app' : 'api')
+  // Opened straight on SMTP login or app password (a link, or SMTP & IMAP's buttons), it closes with Cancel: Back is
+  // for coming from the API key form.
+  const [opened] = useState<Kind>(initial?.smtp && servers ? 'smtp' : initial?.app ? 'app' : 'api')
+  const [kind, setKind] = useState<Kind>(opened)
   const [pending, setPending] = useState(false)
   useDomainOptions(open)
   const active: Kind = kind === 'smtp' && !servers ? 'api' : kind
   const form = forms[active]
   const props = { open, onOpenChange, onPending: setPending, onCreated }
   return <Dialog open={open} onOpenChange={next => { if (!pending) onOpenChange(next) }} title={form.title}
-    footer={<>{active === 'api' ? <Button disabled={pending} onClick={() => onOpenChange(false)}>Cancel</Button> : <Button disabled={pending} onClick={() => setKind('api')}>Back</Button>}<Button variant="primary" loading={pending} type="submit" form={form.id}>{form.submit}</Button></>}>
+    footer={<>{active === opened ? <Button disabled={pending} onClick={() => onOpenChange(false)}>Cancel</Button> : <Button disabled={pending} onClick={() => setKind('api')}>Back</Button>}<Button variant="primary" loading={pending} type="submit" form={form.id}>{form.submit}</Button></>}>
     {active === 'api' ? <>
       <ApiKeyForm {...props} initial={initial} />
       <div className="keys-alt">
@@ -467,7 +470,7 @@ function SmtpLoginForm({ open, onOpenChange, onPending, onCreated }: FormProps) 
     try {
       const result = await create.mutateAsync(input)
       onOpenChange(false)
-      onCreated({ secret: result.secret, title: 'SMTP login created', description: 'Shown once: copy it now and use it as the app’s SMTP password.', mail: { username: <code>apikey</code>, imap: false, smtp: true } })
+      onCreated({ secret: result.secret, title: 'SMTP login created', description: 'Shown once: copy it now and use it as the app’s SMTP password.', mail: { username: <SmtpUsername />, imap: false, smtp: true } })
     } catch { /* Shown in the form. */ }
   }
   return <form id="create-smtp-login" className="stack" onSubmit={submit} noValidate>

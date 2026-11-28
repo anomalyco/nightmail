@@ -142,6 +142,15 @@ export function Tabs({ value, onValueChange, items, label = 'Sections', disabled
         bar.animate([{ transform: `translateX(${from.left - at.left}px) scaleX(${from.width / at.width})` }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(.2, .8, .2, 1)' });
     };
     place(true);
+    // A row too long for its width scrolls sideways: the selected tab comes fully into view (moved to with the keyboard,
+    // or first shown past the row's right edge). Only the row scrolls, never the page; the last pixel a whole-pixel
+    // marker can stick out by isn't a long row.
+    const list = marker.current?.parentElement, tab = refs.current[index];
+    if (list && tab && list.scrollWidth - list.clientWidth > 1) {
+      const inset = parseFloat(getComputedStyle(list).paddingInlineStart) || 0;
+      const left = tab.offsetLeft - inset, right = tab.offsetLeft + tab.offsetWidth + inset - list.clientWidth;
+      if (list.scrollLeft > left) list.scrollLeft = left; else if (list.scrollLeft < right) list.scrollLeft = right;
+    }
     const observer = new ResizeObserver(() => place(false));
     for (const tab of refs.current) if (tab) observer.observe(tab);
     return () => observer.disconnect();

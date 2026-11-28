@@ -43,7 +43,7 @@ const loadInbound = inbound.preload
 const loadOperator = operator.preload
 const loadSupportInbox = supportInbox.preload
 const loadLegal = legal.preload
-Object.assign(routeChunks, { '/overview': loadOverview, '/logs': loadLogs, '/receiving': loadInbound, '/campaigns': loadCampaigns, '/newsletters': loadNewsletters, '/audience': loadAudience, '/domains': loadSettings, '/api-keys': loadSettings, '/settings': loadSettings, '/docs': loadDocs, '/operator': loadOperator, '/glass': loadOperator, '/support': loadSupportInbox, '/legal': loadLegal })
+Object.assign(routeChunks, { '/overview': loadOverview, '/logs': loadLogs, '/receiving': loadInbound, '/campaigns': loadCampaigns, '/newsletters': loadNewsletters, '/audience': loadAudience, '/domains': loadSettings, '/api-keys': loadSettings, '/smtp-imap': loadSettings, '/settings': loadSettings, '/docs': loadDocs, '/operator': loadOperator, '/glass': loadOperator, '/support': loadSupportInbox, '/legal': loadLegal })
 const LogsPage = logs.page(m => m.LogsPage)
 const LogDetailPage = logs.page(m => m.LogDetailPage)
 const CampaignsPage = campaigns.page(m => m.CampaignsPage)
@@ -62,6 +62,7 @@ const SegmentsPage = audience.page(m => m.SegmentsPage)
 const TopicsPage = audience.page(m => m.TopicsPage)
 const SegmentEditorPage = audience.page(m => m.SegmentEditorPage)
 const ApiKeysPage = settings.page(m => m.ApiKeysPage)
+const SmtpImapPage = settings.page(m => m.SmtpImapPage)
 const DomainsPage = settings.page(m => m.DomainsPage)
 const DomainDetailPage = settings.page(m => m.DomainDetailPage)
 const SettingsPage = settings.page(m => m.SettingsPage)
@@ -127,7 +128,7 @@ else if (['/campaigns', '/templates'].some(path => initialPath.startsWith(path))
 }
 else if (initialPath.startsWith('/newsletters')) loadNewsletters().catch(noop)
 else if (['/audience', '/contacts', '/lists', '/segments'].some(path => initialPath.startsWith(path))) loadAudience().catch(noop)
-else if (['/api-keys', '/domains', '/settings'].some(path => initialPath.startsWith(path))) loadSettings().catch(noop)
+else if (['/api-keys', '/smtp-imap', '/domains', '/settings'].some(path => initialPath.startsWith(path))) loadSettings().catch(noop)
 else if (['/receiving', '/inbound', '/mailboxes'].some(path => initialPath.startsWith(path))) loadInbound().catch(noop)
 else if (initialPath.startsWith('/operator') || initialPath === '/glass') loadOperator().catch(noop)
 // A change support proposed (its emailed link) opens over Overview.
@@ -198,7 +199,7 @@ const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider valu
     <Route path="audience" element={<ContactsPage />} /><Route path="audience/contacts/:id" element={<ContactDetailPage />} />
     <Route path="audience/lists" element={<ListsPage />} /><Route path="audience/lists/:id" element={<ListDetailPage />} />
     <Route path="audience/segments" element={<SegmentsPage />} /><Route path="audience/segments/new" element={<SegmentEditorPage />} /><Route path="audience/segments/:id" element={<SegmentEditorPage />} /><Route path="audience/topics" element={<TopicsPage />} />
-    <Route path="api-keys" element={<ApiKeysPage />} /><Route path="domains" element={<DomainsPage />} /><Route path="domains/:id" element={<DomainDetailPage />} />
+    <Route path="api-keys" element={<ApiKeysPage />} /><Route path="smtp-imap" element={<SmtpImapPage />} /><Route path="domains" element={<DomainsPage />} /><Route path="domains/:id" element={<DomainDetailPage />} />
     <Route path="settings" element={<SettingsPage />} /><Route path="settings/mcp/:id" element={<McpApprovalPage />} /><Route path="settings/webhooks/new" element={<WebhookDetailPage />} /><Route path="settings/webhooks/:id" element={<WebhookDetailPage />} />
     <Route path="templates" element={<Moved to={() => '/campaigns/templates'} />} /><Route path="templates/:id" element={<Moved to={params => `/campaigns/templates/${id(params)}`} />} />
     <Route path="contacts" element={<Moved to={() => '/audience'} />} /><Route path="contacts/:id" element={<Moved to={params => `/audience/contacts/${id(params)}`} />} />

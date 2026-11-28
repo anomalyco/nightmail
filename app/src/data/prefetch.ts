@@ -12,7 +12,7 @@ import { issuesRequest, useNewsletters } from '../features/newsletters/shared'
 
 // A warmed result stays fresh this long, so repeated hovers and the idle sweep never refetch it.
 const FRESH = 30_000
-export const sidebarPaths = ['/overview', '/logs', '/receiving', '/campaigns', '/audience', '/domains', '/api-keys', '/settings'] as const
+export const sidebarPaths = ['/overview', '/logs', '/receiving', '/campaigns', '/audience', '/domains', '/api-keys', '/smtp-imap', '/settings'] as const
 // Filled by App.tsx with each route's chunk preload.
 export const routeChunks: Record<string, () => Promise<unknown>> = {}
 
@@ -38,6 +38,8 @@ function firstScreen(path: string, { regionId, multiTenant, canAdminister, newsl
     // Self-hosted domain reads call SES for every identity (the list refreshes by default), so only hosted workspaces warm it.
     case '/domains': return multiTenant && canAdminister ? [queries.domains(regionId, 1)] : []
     case '/api-keys': return canAdminister ? [queries.keys(undefined, false), queries.agents(false), queries.appPasswords()] : []
+    // SMTP & IMAP: the app passwords under its IMAP settings (the settings themselves come with the session).
+    case '/smtp-imap': return canAdminister ? [queries.appPasswords()] : []
     // Self-hosted settings load their own region and workspace data; hosted memberships come with the session (/v1/me).
     case '/settings': return !multiTenant || !canAdminister ? [] : [queries.connection(), queries.webhooks(), queries.workspaceMembers(), queries.workspaceInvitations()]
     default: return []
