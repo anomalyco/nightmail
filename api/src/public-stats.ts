@@ -3,6 +3,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, errors, log, response, type App, type DbExecutor, type Runtime } from './core.js';
 import { cachedDashboardRead } from './dashboard-cache.js';
 import { poolSends } from './states.js';
+import { emailAccepted, emailBounced, emailDelivered } from './email-outcomes.js';
 
 const PublicStats = z.object({
   generatedAt: z.string().describe('The end of the last whole UTC hour the figures cover. They change at most once an hour; responses are cached for up to 60 seconds.'),
@@ -33,7 +34,7 @@ const coarse = (n: number) => n < 100 ? Math.round(n / 10) * 10 : (() => { const
 // Scheduled, queued and attempting mail has no outcome yet; leaving it out still matches the partial index sending_emails_retire (created_at).
 const settled = sql`NOT e.simulated AND e.status NOT IN ('scheduled','queued','attempting')`;
 // The same "accepted" evidence as GET /v1/metrics: a provider ID, an accepted-or-later status, or the accepted outcome bit.
-const accepted = sql`(e.status <> 'suppressed' AND (e.provider_id IS NOT NULL OR e.status IN ('accepted','sent','delivered','bounced','complained','delayed') OR (e.event_outcomes & 1) <> 0))`;
+const accepted = emailAccepted();
 // A hosted installation counts only mail sent through its shared pool, never a BYO tenant's own account (as hosted_real_envelopes).
 const hostedMail = (multiTenant: boolean) => multiTenant ? sql`((e.feedback_topic_arn IS NULL AND EXISTS (SELECT FROM provider_connections pc WHERE pc.workspace_id = e.workspace_id AND pc.kind = 'shared'))
   OR EXISTS (SELECT FROM provider_feedback_history h WHERE h.topic_arn = e.feedback_topic_arn AND h.kind = 'shared'))` : sql`true`;
@@ -62,8 +63,8 @@ export async function refreshPublicStats(db: Pick<DbExecutor, 'execute'>, multiT
     FROM generate_series(${from}, ${to} - interval '1 minute', interval '1 minute') AS m(minute)
     LEFT JOIN (
       SELECT date_trunc('minute', e.created_at, 'UTC') AS minute, count(*) FILTER (WHERE ${accepted})::int AS accepted,
-        count(*) FILTER (WHERE e.status = 'delivered' OR (e.event_outcomes & 2) <> 0)::int AS delivered,
-        count(*) FILTER (WHERE e.status = 'bounced' OR (e.event_outcomes & 4) <> 0)::int AS bounced,
+        count(*) FILTER (WHERE ${emailDelivered()})::int AS delivered,
+        count(*) FILTER (WHERE ${emailBounced()})::int AS bounced,
         array_agg(DISTINCT e.region) FILTER (WHERE ${accepted}) AS regions,
         (array_agg(DISTINCT e.workspace_id) FILTER (WHERE ${accepted}))[1:${privacy.workspaces}] AS workspaces
       FROM sending_emails e

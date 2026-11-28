@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { actor, ApiError, denied, errors, json, response, security, type Actor, type App, type Runtime } from './core.js';
 import { ownSecretPattern, productName } from './brand.js';
+import { capabilityPattern, FORWARD_CONFIRM_TOKEN, FORWARD_STOP_TOKEN, SIGNIN_LINK_TOKEN, UNSUBSCRIBE_TOKEN } from './capabilities.js';
 import { maskedAddress } from './support-conversations.js';
 
 // Agent feedback (POST /v1/feedback): an agent tells us what in Nightmail got in its way and what would have made it
@@ -28,11 +29,11 @@ export const answersToday = sql`answer_state IN ('due', 'started') AND created_a
 const CREDENTIALS = { apiKey: 'API key', agentToken: 'agent token', mcp: 'MCP sign-in', dashboard: 'dashboard session' } as const;
 
 // Credentials as they appear in text, most specific first: Nightmail's own secrets (src/brand.ts ownSecretPattern: nm_…
-// and the earlier bane_… and os_… keys, which still work; and the u_ and fwd_ capability links), private keys, JWTs (an MCP access token is one) and common providers' keys.
+// and the earlier bane_… and os_… keys, which still work; and every capability link, src/capabilities.ts), private keys, JWTs (an MCP access token is one) and common providers' keys.
 const SECRETS: RegExp[] = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
   ownSecretPattern,
-  /\b(?:u|fwd)_[0-9a-f]{64}\b/g,
+  capabilityPattern(UNSUBSCRIBE_TOKEN, FORWARD_CONFIRM_TOKEN, FORWARD_STOP_TOKEN, SIGNIN_LINK_TOKEN),
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}/g, /\bwhsec_[A-Za-z0-9+/=]{16,}/g, /\bsk-[A-Za-z0-9_-]{20,}/g,

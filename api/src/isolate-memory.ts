@@ -121,6 +121,24 @@ const waitingByWs = new Map<string, number>();
 const activeHolds = new Set<ActiveHold>();
 const waiting: Waiter[] = [];
 
+/**
+ * Idle buffers kept for reuse (verified attachments, src/sending.ts verifiedAttachment). They are memory the isolate
+ * holds just as a hold is, so the budget counts them: whenever holds, caches and a new reservation together would pass
+ * it, the oldest cached bytes are dropped first. `evict(bytes)` drops at least that many, or everything it holds.
+ */
+export type MemoryCache = { bytes(): number; evict(bytes: number): void };
+const caches: MemoryCache[] = [];
+export function registerMemoryCache(cache: MemoryCache) { caches.push(cache); }
+const cachedBytes = () => caches.reduce((n, cache) => n + cache.bytes(), 0);
+/** Drops cached bytes until holds, caches and `needed` more fit the budget (as far as the caches can give). */
+export function fitMemoryCaches(needed = 0) {
+  for (const cache of caches) {
+    const over = used + cachedBytes() + needed - budget;
+    if (over <= 0) return;
+    cache.evict(over);
+  }
+}
+
 // Tracks the outer lease scope so nested withMemory()/reserveMemory() calls up to that size don't deadlock on themselves.
 const holding = new AsyncLocalStorage<{ bytes: number; touch: () => void }>();
 
@@ -131,9 +149,11 @@ function adjustMap(map: Map<string, number>, key: string | undefined, delta: num
   else map.set(key, next);
 }
 
+// Fits when the holds leave room; cached bytes are then dropped as far as the reservation needs theirs.
 function canFit(bytes: number, workspaceId: string | undefined, wsCap: number): boolean {
   if (used + bytes > budget) return false;
   if (workspaceId !== undefined && (usedByWs.get(workspaceId) ?? 0) + bytes > wsCap) return false;
+  fitMemoryCaches(bytes);
   return true;
 }
 
@@ -325,7 +345,7 @@ function wrapHold(hold: ActiveHold): MemoryLease {
       if (hold.released) return false;
       const next = Math.max(1, Math.ceil(newBytes)), delta = next - hold.bytes;
       if (delta > 0) {
-        if (!canFit(delta, hold.workspaceId, MEMORY_LIMITS.maxWorkspaceBytes) || heldByRoute(hold.route) + delta > (hold.routeCap ?? budget)) return false;
+        if (heldByRoute(hold.route) + delta > (hold.routeCap ?? budget) || !canFit(delta, hold.workspaceId, MEMORY_LIMITS.maxWorkspaceBytes)) return false;
         hold.bytes = next;
         used += delta;
         adjustMap(usedByWs, hold.workspaceId, delta);
@@ -379,6 +399,7 @@ export async function reserveMemory(bytes: number, opts: MemoryLeaseOptions = {}
       };
     }
     log('warn', { code: 'ISOLATE_MEMORY_NESTED_GROWTH', heldBytes: outer.bytes, neededBytes: n, route });
+    fitMemoryCaches(n - outer.bytes);
     const delta = makeHold(n - outer.bytes, opts.workspaceId, route, idleMs, maxMs, opts.onReclaim, true, now);
     return wrapHold(delta);
   }
@@ -480,7 +501,7 @@ export function tryReserveMemory(bytes: number, opts: Pick<MemoryLeaseOptions, '
   const n = Math.max(1, Math.ceil(bytes)), route = opts.route ?? 'general', routeCap = opts.routeCap ?? budget, now = Date.now();
   reclaimExpiredMemory(now);
   admit(now);
-  if (waiting.length || !canFit(n, opts.workspaceId, Math.max(n, MEMORY_LIMITS.maxWorkspaceBytes)) || heldByRoute(route) + n > routeCap) return null;
+  if (waiting.length || heldByRoute(route) + n > routeCap || !canFit(n, opts.workspaceId, Math.max(n, MEMORY_LIMITS.maxWorkspaceBytes))) return null;
   const hold = makeHold(n, opts.workspaceId, route, opts.idleMs ?? MEMORY_LIMITS.defaultIdleMs, opts.maxMs ?? MEMORY_LIMITS.defaultMaxMs, undefined, true, now);
   hold.routeCap = routeCap;
   return wrapHold(hold);
@@ -512,7 +533,7 @@ export const memoryInUse = () => {
 /** Diagnostic snapshot of active holds, waiters, and reclaimed holds (for tests and metrics). */
 export const memoryStats = () => {
   reclaimExpiredMemory();
-  return { usedBytes: used, activeHolds: activeHolds.size, waitingCount: waiting.length, reclaimedTotal };
+  return { usedBytes: used, cachedBytes: cachedBytes(), activeHolds: activeHolds.size, waitingCount: waiting.length, reclaimedTotal };
 };
 
 /** A dispatcher page's peak: per byte of files, the files and the SES JSON body with their base64 (4/3), and for raw

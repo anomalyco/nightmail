@@ -786,8 +786,8 @@ test('rules: compiler diagnostics, linear regex, plain scores and atomic step/ou
   assert.deepEqual(runRitual(ir,{subject:'NEWS',text:'hi'},{},{}).intents.map(i=>i.op),['label','endpoint']);
   // Diagnostics name the problem, point at it and suggest the fix.
   for(const [body,pattern] of [['email.subjet',/column 7: email has no field subjet\. Did you mean email\.subject\?/],['slack.billing({text:"x"})',/called by name.*endpoints\.billing\(\{ text \}\)/],['lable("x")',/Did you mean label\(\)\?/],['let x=1',/Use const, not let/],['const r=omens(email,{refund:"Is this a refund?"});if(r.refnd)label("x")',/Did you mean r\.refund\?/],['const r=decisions(email,{refund:"Is this a refund?"});if(r.refnd)label("x")',/has no decision named refnd\. Did you mean r\.refund\?/],['decision(email,{a:"Is this a refund?"})',/Did you mean decisions\(\)\?/],['inbox.delver("x")',/Did you mean inbox\.deliver\(\)\?/],['for(;;){}',/Loops are not available/],['x==1',/Use === instead of ==/]] as const)assert.throws(()=>compileRitual(source(body)),pattern);
-  const {retryAfterMs,actionDelay,endpointPolicy}=await import('./src/ritual-retry.js');assert.equal(retryAfterMs('1.5'),1500);assert.equal(retryAfterMs('120'),120000);assert.ok(retryAfterMs(new Date(Date.now()+5000).toUTCString())>3000);assert.equal(retryAfterMs('soon'),0);
-  for(const r of [0,0.5,0.999]){const d=actionDelay(2,0,()=>r);assert.ok(d>=45000&&d<=75000,String(d))}assert.equal(actionDelay(1,90000,()=>0),90000);assert.deepEqual(endpointPolicy('slack'),{perMinute:60,retryOnTimeout:false,idempotent:false});assert.equal(endpointPolicy('webhook').perMinute,600);assert.equal(endpointPolicy('forward',{retry_on_timeout:false}).retryOnTimeout,true);
+  const {retryAfterMs,retryDelay,endpointPolicy}=await import('./src/ritual-retry.js');assert.equal(retryAfterMs('1.5'),1500);assert.equal(retryAfterMs('120'),120000);assert.ok(retryAfterMs(new Date(Date.now()+5000).toUTCString())>3000);assert.equal(retryAfterMs('soon'),0);
+  for(const r of [0,0.5,0.999]){const d=retryDelay(2,{capMs:12*3600000,random:()=>r});assert.ok(d>=45000&&d<=75000,String(d))}assert.equal(retryDelay(1,{capMs:12*3600000,afterMs:90000,random:()=>0}),90000);assert.deepEqual(endpointPolicy('slack'),{perMinute:60,retryOnTimeout:false,idempotent:false});assert.equal(endpointPolicy('webhook').perMinute,600);assert.equal(endpointPolicy('forward',{retry_on_timeout:false}).retryOnTimeout,true);
   const {ritualTemplates,ritualTypings}=await import('./src/ritual-schema.js');for(const t of ritualTemplates)assert.doesNotThrow(()=>compileRitual(t.source()),t.id);assert.ok(ritualTemplates.length>=9);
   const dts=ritualTypings({endpoints:[{name:'billing',type:'slack',status:'ready'},{name:'support-hook',type:'webhook',status:'ready'}],inboxes:['support'],lists:['vip']});assert.match(dts,/billing\(message: \{ text: string \}\): void/);assert.match(dts,/"support-hook"\(payload\?: Record<string, unknown>\): void/);assert.match(dts,/deliver\(key: "support"\)/);assert.match(dts,/has\(list: "vip", value: string\)/);assert.match(dts,/declare function decisions</);assert.match(dts,/@deprecated The earlier name for decisions\(\)[^\n]*\ndeclare function omens</);
   for(const r of [runRitual(ir,{subject:'news',text:'x'.repeat(65537)},{},{}),runRitual(ir,{subject:'news',text:'hi'},{},{},{},2)]){assert.ok(r.error);assert.deepEqual(r.intents,[])}
@@ -972,6 +972,122 @@ after(async () => {
     try { if (manager) await authDb.query('DELETE FROM nightmail_users WHERE id = $1', [manager.userId]); }
     finally { await authDb.end(); }
   }
+});
+test('capability links: unsubscribe, forward confirm and stop, and sign-in links are withheld by one grammar', async () => {
+  const { redactCapabilityText } = await import('./src/core.js'), { sealCapabilities } = await import('./src/mailbox-send.js'), { redactSecrets } = await import('./src/feedback.js');
+  const { signinLinkUrl, newLinkId } = await import('./src/signups.js'), { forwardStopUrl } = await import('./src/endpoints.js');
+  // Each made by its issuer: a stop link's HMAC and a sign-in link's ID and HMAC are base64url, the others hex.
+  const unsubscribe = `u_${'a'.repeat(64)}`, confirm = `fwd_${'b'.repeat(64)}`;
+  const stopUrl = await forwardStopUrl({ config: { encryptionKey: 'c'.repeat(64) } } as never, `con_${'d'.repeat(32)}`, 'https://links.example');
+  const signin = signinLinkUrl({ authSecret: 'e'.repeat(32), publicUrl: 'https://mail.example' }, newLinkId());
+  const stop = stopUrl.slice(stopUrl.lastIndexOf('/') + 1), link = new URL(signin).searchParams.get('link')!;
+  const text = `Leave: https://x.example/unsubscribe/${unsubscribe}. Allow: https://x.example/v1/forwarding/confirm/${confirm}. Stop: ${stopUrl}. Sign in: ${signin}`;
+  const readOnly = redactCapabilityText(text), feedback = redactSecrets(text).text, sealed = sealCapabilities(text);
+  for (const token of [unsubscribe, confirm, stop, link]) {
+    assert.ok(!readOnly.includes(token), `A read-only view shows ${token}`);
+    assert.ok(!feedback.includes(token), `A feedback report keeps ${token}`);
+  }
+  assert.match(readOnly, /\/stop\/\[redacted\]\. Sign in: https:\/\/mail\.example\/overview\?link=\[redacted\]$/);
+  // A sealed copy withholds what only its recipient may use; the rest of the message is as sent.
+  assert.deepEqual([confirm, link, unsubscribe, stop].map(token => sealed.includes(token)), [false, false, true, true]);
+  // The route gate lets exactly a well-formed emailed link through without a credential.
+  const { createApp } = await import('./src/app.js'), app = createApp();
+  const gate = async (path: string) => (await app.fetch(new Request(`https://api.example${path}`), fixtureWorker?.runtime ?? {} as never)).status;
+  if (fixtureWorker) {
+    assert.notEqual(await gate(`/v1/forwarding/stop/${stop}`), 401);
+    assert.equal(await gate(`/v1/forwarding/stop/${stop}x`), 401);
+  }
+});
+test('DMARC and SPF: a domain claim and its support health check read a record the same way', async t => {
+  const { readDmarc, observeDmarc } = await import('./src/dmarc.js'), { parseDmarc, parseSpf, liveDns, domainFindings } = await import('./src/deliverability.js'), { spfIncludesAmazonSes, withPublicDns } = await import('./src/record-check.js');
+  const cases: [string[], boolean][] = [
+    [['v=DMARC1; p=reject; rua=mailto:d@example.com'], true], [['v=DMARC1; p=none', 'v=DMARC1; p=reject'], false], [['v=DMARC1; p=none; sp=bogus'], false],
+    [['v=DMARC1; p=none; pct=999'], false], [['v=DMARC1; p=none; adkim=x'], false], [['v=DMARC1; p=none; p=reject'], false], [['p=none; v=DMARC1'], false], [['"v=DMARC1; " "p=quarantine"'], true],
+    // A DKIM key published at _dmarc by mistake has a p= too: beside a real DMARC record it is not a second one.
+    [['v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3', 'v=DMARC1; p=reject'], true],
+  ];
+  for (const [values, valid] of cases) {
+    assert.equal(readDmarc(values)?.valid, valid, values.join(' | '));
+    assert.equal(parseDmarc(values, 'live').valid, valid, values.join(' | '));
+  }
+  // A stored observation of two records keeps both, a line each, and stays invalid when read back (RFC 7489 §6.6.3).
+  assert.equal(parseDmarc((readDmarc(['v=DMARC1; p=none', 'v=DMARC1; p=reject'])!.record).split('\n'), 'stored').valid, false);
+  // The same two published records, through the claim's observation and the health check's live read.
+  const name = `${randomUUID()}.example.com`, txt = new Map<string, string[]>([[`_dmarc.${name}`, ['v=DMARC1; p=none', 'v=DMARC1; p=reject']]]);
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL) => {
+    const q = new URL(String(input)).searchParams.get('name')!, data = txt.get(q);
+    return Response.json(data ? { Status: 0, Answer: data.map(data => ({ name: q, type: 16, data: `"${data}"` })) } : { Status: 3 });
+  });
+  assert.deepEqual([(await observeDmarc(name))?.status, (await liveDns(name, null, null)).dmarc.valid], ['invalid', false]);
+  // Two SPF records at a MAIL FROM are a permerror (RFC 7208 §4.5): Check now never calls the record found.
+  const spfState = async (records: string[]) => {
+    const host = `bounce.${randomUUID()}.example.com`; txt.set(host, records);
+    const record: { name: string; type: 'TXT'; value: string; purpose: string; status: string; publicDns?: import('./src/record-check.js').PublicDns | null } = { name: host, type: 'TXT', value: 'v=spf1 include:amazonses.com ~all', purpose: 'mail_from', status: 'pending' };
+    await withPublicDns({ name: host, dns: [record] });
+    return record.publicDns?.state;
+  };
+  assert.deepEqual([await spfState(['v=spf1 include:amazonses.com ~all']), await spfState(['v=spf1 include:amazonses.com ~all', 'v=spf1 -all'])], ['found', 'wrong_value']);
+  // BIMI needs DMARC at enforcement, and an invalid record enforces nothing whatever its p= says.
+  const bimiReady = (dmarc: string) => !domainFindings(name, { dns: { checkedAt: '', complete: true, spf: parseSpf([]), dmarc: parseDmarc([dmarc], 'live'), bimi: { record: 'v=BIMI1; l=https://x.example/l.svg; a=https://x.example/a.pem', logo: true, authority: true }, mailFrom: null },
+    align: { dmarcPasses: true } as never, days: [], ageDays: null, bulk: [], marketingApi: 0 }).some(f => f.code === 'BIMI_NOT_READY');
+  assert.deepEqual([bimiReady('v=DMARC1; p=reject'), bimiReady('v=DMARC1; p=reject; pct=999')], [true, false]);
+  for (const [term, passes] of [['include:amazonses.com', true], ['+include:amazonses.com', true], ['INCLUDE:AmazonSES.com', true], ['-include:amazonses.com', false], ['~include:amazonses.com', false], ['?include:amazonses.com', false], ['include:amazonses.com.evil.example', false]] as const) {
+    const record = `v=spf1 ${term} ~all`;
+    assert.deepEqual([spfIncludesAmazonSes(record), parseSpf([record]).includesAmazonSes], [passes, passes], term);
+  }
+});
+test('retries: failures that happened together are spread out, up to each kind of work\'s cap', async () => {
+  const { retryDelay } = await import('./src/ritual-retry.js');
+  assert.deepEqual([0, 0.5, 0.999].map(r => retryDelay(3, { capMs: 3_600_000, random: () => r })), [180_000, 240_000, 299_880]);
+  // The cap is a ceiling, jitter included: 12 hours for webhooks and rule actions, 15 minutes for a module that failed to
+  // load. Waits at the cap spread evenly over its last quarter, none piled on the cap itself, however many attempts.
+  assert.deepEqual([0, 0.5, 1].map(r => retryDelay(20, { capMs: 12 * 3_600_000, random: () => r })), [9 * 3_600_000, 10.5 * 3_600_000, 12 * 3_600_000]);
+  assert.deepEqual([0, 1].map(r => retryDelay(9, { capMs: 15 * 60_000, random: () => r })), [675_000, 900_000]);
+  assert.equal(retryDelay(1000, { capMs: 12 * 3_600_000, random: () => 0.5 }), 10.5 * 3_600_000, 'A thousandth attempt is still a finite wait.');
+  const capped = Array.from({ length: 400 }, () => retryDelay(30, { capMs: 3_600_000 }));
+  assert.ok(capped.filter(d => d === 3_600_000).length < 10, 'Capped retries are not piled on the cap.');
+  assert.equal(retryDelay(1, { capMs: 3_600_000, afterMs: 120_000, random: () => 1 }), 120_000, 'Never sooner than the endpoint asked.');
+  const batch = Array.from({ length: 200 }, () => retryDelay(4, { capMs: 3_600_000 }));
+  assert.ok(new Set(batch).size > 100 && Math.min(...batch) >= 720_000 && Math.max(...batch) <= 1_200_000, 'A batch of failed webhooks does not come due at one instant.');
+});
+test('verified attachments: the isolate cache is part of the memory budget and gives way to a reservation', async () => {
+  const { verifiedAttachment } = await import('./src/sending.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
+  const body = new Uint8Array(8 * 1024 * 1024).fill(7), checksum = createHash('sha256').update(body).digest('hex');
+  let reads = 0;
+  const runtime = { storage: { cacheScope: {}, async get() { reads++; return { body, contentType: 'application/octet-stream' }; } } } as never;
+  const row = { storageKey: unique('cached-attachment'), checksum, size: body.length } as never;
+  const cached = memoryStats().cachedBytes;
+  await verifiedAttachment(runtime, row); await verifiedAttachment(runtime, row);
+  assert.deepEqual([reads, memoryStats().cachedBytes - cached], [1, body.length], 'Read once, then served from the cache, which the budget counts.');
+  const room = SEND_LIMITS.isolateWorkingBytes - memoryStats().usedBytes - 1024 * 1024;
+  const lease = await reserveMemory(room, { route: 'acceptance.attachment-cache' });
+  try {
+    const after = memoryStats();
+    assert.ok(after.usedBytes + after.cachedBytes <= SEND_LIMITS.isolateWorkingBytes, `${after.usedBytes} held + ${after.cachedBytes} cached`);
+  } finally { lease.release(); }
+  await verifiedAttachment(runtime, row);
+  assert.equal(reads, 2, 'The reservation dropped the idle cached file, so it is read again.');
+});
+test('campaign health: a campaign\'s tallies count accepted, bounced and complained mail as its emails do', async t => {
+  const db = await fixtureDatabase(t), { drizzle } = await import('drizzle-orm/node-postgres'), { campaignOutcomes } = await import('./src/sending.js');
+  const wid = unique('health-tallies'), campaign = unique('cmp');
+  await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [wid]);
+  cleanup(t, async () => { await db.query('DELETE FROM sending_emails WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM sending_campaign_tallies WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM workspaces WHERE id=$1', [wid]); });
+  // [status, provider ID, event_outcomes]: a delivery; a hard bounce SES then also reported as a complaint (the complaint
+  // ranks higher, so only its bit says it bounced); a bounce; mail accepted by its bit alone; suppressed mail; mail still queued.
+  const mail: [string, string | null, number][] = [['delivered', 'p1', 3], ['complained', 'p2', 13], ['bounced', 'p3', 5], ['sent', null, 1], ['suppressed', null, 0], ['queued', null, 0]];
+  const ids: string[] = [];
+  for (const [status, provider, outcomes] of mail) {
+    const id = unique('health-email'); ids.push(id);
+    await db.query(`INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, campaign_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id, event_outcomes)
+      VALUES ($1,$2,$3,'fixture',$4,'sender@example.com','["r@example.com"]','[]','[]','Health','{}',false,$5,$6,$7)`, [id, wid, REGION, campaign, status, provider, outcomes]);
+  }
+  // A later complaint on the plain bounce: an update the tally triggers count too.
+  await db.query("UPDATE sending_emails SET status='complained', event_outcomes=event_outcomes|8 WHERE id=$1", [ids[2]]);
+  const executor = drizzle(db);
+  const [tallied, counted] = [await campaignOutcomes(executor, wid, campaign, false), await campaignOutcomes(executor, wid, campaign, true)];
+  assert.deepEqual(tallied, { accepted: 4, bounced: 2, complained: 2 });
+  assert.deepEqual(counted, tallied, 'The emails, counted, agree with the tallies.');
 });
 test('OIDC migration links only connected subjects; nobody is adopted by email', async t => {
   const db = await fixtureDatabase(t);
@@ -43625,8 +43741,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         assert.equal((await db.query('SELECT FROM mail_forward_once WHERE message_id=$1',[over.id])).rowCount,0);
         await db.query("DELETE FROM api_request_budgets WHERE workspace_id=$1 AND key_id IN ('forward-daily',$2)",[wid,'forward-hourly:'+hookId]);
         // Every forward carries a signed stop link; a forged one is refused and stopping blocks new requests for 30 days.
+        // A link whose signature is the wrong shape isn't a capability at all: the gate refuses it before the route (src/capabilities.ts).
         const stop=new URL(/Stop these forwards: (\S+)/.exec(rows[0].text)![1]).pathname;
-        for (const [link,status] of [[stop,200],[stop.replace(/\.[^.]+$/,'.forged'),404]] as const) {
+        for (const [link,status] of [[stop,200],[stop.replace(/\.[^.]+$/,'.'+'A'.repeat(43)),404],[stop.replace(/\.[^.]+$/,'.forged'),401]] as const) {
           const get=await page('GET',link), head=await page('HEAD',link);
           assert.equal(get.status,status);
           assert.deepEqual([head.status,head.headers.get('content-type'),await head.text()], [status,get.headers.get('content-type'),'']);
@@ -51575,7 +51692,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
                 assert.equal(jobRow.last_error, 'MODULE_LOAD_FAILED');
                 assert.equal(jobRow.payload._loadFailures, i);
                 assert.ok(jobRow.delay_s <= 905, 'Backoff must cap at 15 minutes (900s), got ' + jobRow.delay_s);
-                if (i >= 5) assert.ok(jobRow.delay_s >= 890 && jobRow.delay_s <= 905, 'Expected 15m cap at failure #' + i + ', got ' + jobRow.delay_s);
+                // Jittered (src/ritual-retry.ts retryDelay): at the cap a wait falls in its last quarter.
+                if (i >= 5) assert.ok(jobRow.delay_s >= 0.75 * 900 - 5 && jobRow.delay_s <= 905, 'Expected 15m cap at failure #' + i + ', got ' + jobRow.delay_s);
                 assert.deepEqual(campRow, { state: 'preparing', prepared: 0, expanded: 0, error: null });
               }
             } finally {

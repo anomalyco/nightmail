@@ -2,6 +2,10 @@ import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, budgetedRead, type DbExecutor, type ReadBudget, type Runtime } from './core.js';
 import { productName } from './brand.js';
 import { hygieneLists } from './list-hygiene.js';
+import { readDmarc } from './dmarc.js';
+import { txtText } from './public-dns.js';
+import { emailAccepted, emailBounced, emailComplained, emailDelivered, emailHas } from './email-outcomes.js';
+import { spfIncludesAmazonSes } from './record-check.js';
 
 // Deliverability aggregates over a workspace's retained mail (30 days of sending_emails and their events), shared by
 // the support grant's reads (src/support-deliverability.ts) and, later, a customer /v1/metrics?groupBy= (decision D9).
@@ -158,16 +162,16 @@ export const rates = (c: Counts) => ({
 const bucketOf = (granularity: Granularity, column: SQL) => granularity === 'hour'
   ? sql`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24":00:00.000Z"')` : sql`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`;
 // Real mail only: simulated mail is counted apart and never as evidence. Accepted: provider acceptance, as getMetrics.
-const ACCEPTED = sql`e.status <> 'suppressed' AND (e.provider_id IS NOT NULL OR e.status IN ('accepted','sent','delivered','bounced','complained','delayed') OR e.event_outcomes & 1 <> 0)`;
+const ACCEPTED = emailAccepted();
 const measures = sql`count(*) FILTER (WHERE NOT e.simulated)::int AS emails,
   count(*) FILTER (WHERE NOT e.simulated AND ${ACCEPTED})::int AS accepted,
-  count(*) FILTER (WHERE NOT e.simulated AND (e.status = 'delivered' OR e.event_outcomes & 2 <> 0))::int AS delivered,
-  count(*) FILTER (WHERE NOT e.simulated AND (e.status = 'bounced' OR e.event_outcomes & 4 <> 0))::int AS "hardBounced",
-  count(*) FILTER (WHERE NOT e.simulated AND (e.status = 'delayed' OR e.event_outcomes & 128 <> 0))::int AS "softBounced",
-  count(*) FILTER (WHERE NOT e.simulated AND (e.status = 'complained' OR e.event_outcomes & 8 <> 0))::int AS complained,
-  count(*) FILTER (WHERE NOT e.simulated AND e.event_outcomes & 16 <> 0)::int AS opened,
+  count(*) FILTER (WHERE NOT e.simulated AND ${emailDelivered()})::int AS delivered,
+  count(*) FILTER (WHERE NOT e.simulated AND ${emailBounced()})::int AS "hardBounced",
+  count(*) FILTER (WHERE NOT e.simulated AND (e.status = 'delayed' OR ${emailHas('e', 'delayed')}))::int AS "softBounced",
+  count(*) FILTER (WHERE NOT e.simulated AND ${emailComplained()})::int AS complained,
+  count(*) FILTER (WHERE NOT e.simulated AND ${emailHas('e', 'opened')})::int AS opened,
   count(*) FILTER (WHERE NOT e.simulated AND h.email_id IS NOT NULL)::int AS "openedHuman",
-  count(*) FILTER (WHERE NOT e.simulated AND e.event_outcomes & 32 <> 0)::int AS clicked,
+  count(*) FILTER (WHERE NOT e.simulated AND ${emailHas('e', 'clicked')})::int AS clicked,
   count(*) FILTER (WHERE NOT e.simulated AND e.status = 'rejected' AND e.error_code = ANY(${texts(SCREEN_CODES)}))::int AS "screenRejected",
   count(*) FILTER (WHERE NOT e.simulated AND e.status = 'suppressed')::int AS suppressed,
   count(*) FILTER (WHERE e.simulated)::int AS simulated`;
@@ -302,7 +306,7 @@ export async function bounceReasons(db: DbExecutor, wid: string, q: BounceQuery)
   const other = rest.length ? { groups: rest.length, count: rest.reduce((s, r) => s + r.count, 0) } : null;
   // First sends: campaign mail, the sender score's definition of mail to recipients not mailed before (hygiene factor).
   const { rows: [first] } = await db.execute<{ sends: number; bounced: number }>(sql`SELECT count(*) FILTER (WHERE ${ACCEPTED})::int AS sends,
-      count(*) FILTER (WHERE e.status = 'bounced' OR e.event_outcomes & 4 <> 0)::int AS bounced
+      count(*) FILTER (WHERE ${emailBounced()})::int AS bounced
     FROM sending_emails e WHERE ${mail} AND e.created_at >= ${q.since}::timestamptz AND e.created_at < ${q.until}::timestamptz AND NOT e.simulated AND e.campaign_id IS NOT NULL`);
   const firstSend = { basis: 'Campaign mail, which the sender score counts as first sends (recipients not mailed before).', ...rate(first?.bounced ?? 0, first?.sends ?? 0) };
   const complaints = Object.entries(groups.filter(g => g.class === 'complaint').reduce<Record<string, number>>((m, g) => ({ ...m, [g.subtype]: (m[g.subtype] ?? 0) + g.count }), {})).map(([feedbackType, count]) => ({ feedbackType, count }));
@@ -310,7 +314,7 @@ export async function bounceReasons(db: DbExecutor, wid: string, q: BounceQuery)
   const delivered: Record<string, number> = {};
   if (groups.some(g => (g.class === 'deferral' || g.class === 'soft_bounce') && THROTTLE.test(`${g.status ?? ''} ${g.diagnostic ?? ''}`))) {
     const { rows } = await db.execute<{ provider: string; n: number }>(sql`SELECT ${providerSql(sql`x.domain`)} AS provider, sum(x.n)::int AS n FROM (SELECT ${recipientDomain} AS domain, count(*) AS n
-      FROM sending_emails e WHERE ${mail} AND e.created_at >= ${q.since}::timestamptz AND e.created_at < ${q.until}::timestamptz AND NOT e.simulated AND (e.status = 'delivered' OR e.event_outcomes & 2 <> 0) GROUP BY 1) x GROUP BY 1`);
+      FROM sending_emails e WHERE ${mail} AND e.created_at >= ${q.since}::timestamptz AND e.created_at < ${q.until}::timestamptz AND NOT e.simulated AND ${emailDelivered()} GROUP BY 1) x GROUP BY 1`);
     for (const r of rows) delivered[r.provider] = r.n;
   }
   return { groups, other, complaints, firstSend, findings: byImpact(bounceFindings(groups, firstSend, delivered)) };
@@ -357,11 +361,10 @@ export async function domainActivity(db: DbExecutor, wid: string, domain: string
 type Spf = { record: string | null; records: number; includesAmazonSes: boolean; lookups: number; all: string | null };
 type DmarcTags = { record: string | null; source: 'live' | 'stored' | null; at: string | null; p: string | null; sp: string | null; pct: number | null; adkim: string; aspf: string; rua: boolean; ruf: boolean; valid: boolean };
 export type LiveDns = { checkedAt: string; complete: boolean; spf: Spf; dmarc: DmarcTags; bimi: { record: string | null; logo: boolean; authority: boolean }; mailFrom: { domain: string; mx: string[]; mxExpected: string; spf: Spf } | null };
-const unquote = (s: string) => s.replace(/^"|"$/g, '').replace(/"\s*"/g, '');
 export function parseSpf(values: string[]): Spf {
-  const records = values.map(unquote).filter(v => /^v=spf1(?:\s|$)/i.test(v)), record = records.length === 1 ? records[0]! : null;
+  const records = values.map(txtText).filter(v => /^v=spf1(?:\s|$)/i.test(v)), record = records.length === 1 ? records[0]! : null;
   const terms = record?.split(/\s+/).slice(1) ?? [];
-  return { record: records.length ? records.join('\n').slice(0, 500) : null, records: records.length, includesAmazonSes: terms.some(t => /^[+~?-]?include:amazonses\.com$/i.test(t)),
+  return { record: records.length ? records.join('\n').slice(0, 500) : null, records: records.length, includesAmazonSes: !!record && spfIncludesAmazonSes(record),
     lookups: terms.filter(t => /^[+~?-]?(?:include:|a(?:[:/]|$)|mx(?:[:/]|$)|ptr|exists:)|^redirect=/i.test(t)).length, all: terms.find(t => /^[+~?-]?all$/i.test(t))?.replace(/^\+/, '') ?? null };
 }
 export function parseTags(record: string) {
@@ -369,12 +372,13 @@ export function parseTags(record: string) {
   for (const field of record.trim().replace(/;$/, '').split(';')) { const m = /^\s*([a-z][a-z0-9_-]*)\s*=\s*(.*?)\s*$/i.exec(field); if (m && !tags.has(m[1]!.toLowerCase())) tags.set(m[1]!.toLowerCase(), m[2]!); }
   return tags;
 }
-export function parseDmarc(record: string | null, source: DmarcTags['source'], at: string | null = null): DmarcTags {
-  const tags = record ? parseTags(record) : new Map<string, string>();
+/** What a _dmarc name's TXT strings say, valid as src/dmarc.ts readDmarc decides (one record, RFC 7489's grammar and values). */
+export function parseDmarc(values: string[], source: DmarcTags['source'], at: string | null = null): DmarcTags {
+  const read = readDmarc(values), record = read?.record ?? null, tags = read?.tags ?? new Map<string, string>();
   const pctTag = tags.get('pct');
   return { record: record?.slice(0, 500) ?? null, source: record ? source : null, at: record ? at : null, p: tags.get('p')?.toLowerCase() ?? null, sp: tags.get('sp')?.toLowerCase() ?? null,
     pct: pctTag !== undefined && /^\d{1,3}$/.test(pctTag) ? Number(pctTag) : record ? 100 : null, adkim: tags.get('adkim')?.toLowerCase() ?? 'r', aspf: tags.get('aspf')?.toLowerCase() ?? 'r',
-    rua: !!tags.get('rua'), ruf: !!tags.get('ruf'), valid: !!record && tags.get('v') === 'DMARC1' && ['none', 'quarantine', 'reject'].includes(tags.get('p')?.toLowerCase() ?? '') };
+    rua: !!tags.get('rua'), ruf: !!tags.get('ruf'), valid: read?.valid ?? false };
 }
 
 const dnsCache = new Map<string, { until: number; value: LiveDns }>();
@@ -393,10 +397,11 @@ export async function liveDns(domain: string, mailFrom: { domain: string; region
   const read = (name: string, type: 'TXT' | 'MX') => dns(name, type, signal).then(r => r.values, () => { complete = false; return [] as string[]; });
   const [root, dmarc, bimi, mx, bounce] = await Promise.all([read(domain, 'TXT'), read(`_dmarc.${domain}`, 'TXT'), read(`default._bimi.${domain}`, 'TXT'),
     mailFrom ? read(mailFrom.domain, 'MX') : Promise.resolve([]), mailFrom ? read(mailFrom.domain, 'TXT') : Promise.resolve([])]);
-  const dmarcRecord = dmarc.map(unquote).find(v => /^v\s*=\s*DMARC1/i.test(v)) ?? null;
-  const bimiRecord = bimi.map(unquote).find(v => /^v\s*=\s*BIMI1/i.test(v)) ?? null, bimiTags = bimiRecord ? parseTags(bimiRecord) : new Map<string, string>();
+  const liveDmarc = parseDmarc(dmarc, 'live');
+  const bimiRecord = bimi.map(txtText).find(v => /^v\s*=\s*BIMI1/i.test(v)) ?? null, bimiTags = bimiRecord ? parseTags(bimiRecord) : new Map<string, string>();
   const value: LiveDns = { checkedAt: new Date().toISOString(), complete, spf: parseSpf(root),
-    dmarc: dmarcRecord ? parseDmarc(dmarcRecord, 'live') : parseDmarc(stored?.record ?? null, 'stored', stored?.checkedAt ? new Date(stored.checkedAt).toISOString() : null),
+    // A stored invalid observation keeps every record it saw, one a line.
+    dmarc: liveDmarc.record ? liveDmarc : parseDmarc(stored?.record?.split('\n') ?? [], 'stored', stored?.checkedAt ? new Date(stored.checkedAt).toISOString() : null),
     bimi: { record: bimiRecord?.slice(0, 500) ?? null, logo: !!bimiTags.get('l'), authority: !!bimiTags.get('a') },
     mailFrom: mailFrom ? { domain: mailFrom.domain, mx: mx.map(v => v.trim().split(/\s+/).pop()!.replace(/\.$/, '').toLowerCase()).slice(0, 10), mxExpected: `feedback-smtp.${mailFrom.region}.amazonses.com`, spf: parseSpf(bounce) } : null };
   if (dnsCache.size >= 500) dnsCache.delete(dnsCache.keys().next().value!);
@@ -422,7 +427,7 @@ export function domainFindings(name: string, d: { dns: LiveDns | null; align: Aw
   if (d.dns && !dm?.record) out.push({ severity: 'serious', code: 'DMARC_MISSING', scope: name, evidence: {}, message: `${name} publishes no DMARC record. Gmail, Yahoo and Outlook require one from bulk senders: add a TXT at _dmarc.${name}: v=DMARC1; p=none; rua=mailto:dmarc@${name}` });
   else if (dm?.record && !dm.valid) out.push({ severity: 'serious', code: 'DMARC_INVALID', scope: name, evidence: {}, message: `The DMARC record for ${name} does not parse (it needs v=DMARC1 first and a p= of none, quarantine or reject).` });
   else if (dm?.p === 'none' && !dm.rua) out.push({ severity: 'notice', code: 'DMARC_NO_REPORTS', scope: name, evidence: {}, message: `DMARC for ${name} is p=none with no rua: nobody receives reports. Add rua=mailto:… and move to p=quarantine once mail aligns.` });
-  const enforced = !!dm && (dm.p === 'quarantine' || dm.p === 'reject') && (dm.pct ?? 100) === 100;
+  const enforced = !!dm && dm.valid && (dm.p === 'quarantine' || dm.p === 'reject') && (dm.pct ?? 100) === 100;
   if (d.dns?.bimi.record && (!enforced || !d.dns.bimi.authority)) out.push({ severity: 'notice', code: 'BIMI_NOT_READY', scope: name, evidence: { dmarcPct: dm?.pct ?? 0 },
     message: `${name} publishes BIMI, but ${!enforced ? 'DMARC is not at enforcement (BIMI needs p=quarantine or reject at pct=100)' : 'it has no a= (Gmail shows a logo only with a VMC or CMC)'}.` });
   const spf = d.dns?.mailFrom?.spf ?? null;
