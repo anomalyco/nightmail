@@ -16,6 +16,7 @@ export function RouteSkeleton() {
   const { pathname } = useLocation()
   const identity = useSession()?.identity
   const operator = identity?.operator
+  const { canAdminister } = useWorkspaceAccess()
   const [section, id, view] = pathname.split('/').filter(Boolean)
   if (!section || section === 'overview') return <OverviewRouteSkeleton />
   if (section === 'logs') return !id ? <LogsRouteSkeleton /> : <EmailDetailSkeleton kind={isReceivedId(id) ? 'received' : 'sent'} />
@@ -23,8 +24,9 @@ export function RouteSkeleton() {
   if (section === 'newsletters') return <NewsletterRouteSkeleton id={id} />
   if (section === 'audience') return id === 'lists' ? <AudienceRouteSkeleton kind={view ? 'list' : 'lists'} /> : id === 'segments' ? <AudienceRouteSkeleton kind={view ? 'segment' : 'segments'} isNew={view === 'new'} /> : id === 'topics' ? <AudienceRouteSkeleton kind="topics" /> : <AudienceRouteSkeleton kind={view ? 'contact' : 'contacts'} />
   if (section === 'api-keys') return <SettingsRouteSkeleton kind="keys" />
-  // Without a mail gateway there is no SMTP or IMAP page: an unknown address has no skeleton either.
-  if (section === 'smtp-imap') return identity?.mailServers ? <SmtpImapRouteSkeleton /> : null
+  // Without a mail gateway there is no SMTP or IMAP page: an unknown address has no skeleton either. A member gets
+  // the page's own locked note, never a flash of the hosts and settings before it.
+  if (section === 'smtp-imap') return identity?.mailServers && canAdminister ? <SmtpImapRouteSkeleton /> : null
   if (section === 'domains') return <SettingsRouteSkeleton kind={id ? 'domain' : 'domains'} />
   if (section === 'operator') return <OperatorRouteSkeleton operator={operator} />
   if (section === 'glass') return operator ? <GlassSkeleton /> : null

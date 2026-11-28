@@ -122,8 +122,8 @@ export function AppShell() {
   const prefetchQueries = usePrefetchQueries()
   // A newsletter is an item under its own name where Campaigns sits (features/newsletters/shared.ts has the rule).
   const newsletters = newsletterLinks(useNewsletters())
-  const latest = useRef({ prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters })
-  latest.current = { prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters }
+  const latest = useRef({ prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters, mailGateway })
+  latest.current = { prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters, mailGateway }
   const regionReady = access.multiTenant || Boolean(current)
   // The page in front of the user: its first-screen requests start with its code, not after it, on a cold load too.
   useEffect(() => {
@@ -252,7 +252,9 @@ export function AppShell() {
       if (armed && Date.now() - armed < 1000) {
         armed = 0
         const path = Object.keys(goKeys).find(item => goKeys[item] === key)
-        if (path) { event.preventDefault(); go.current(path) }
+        // G M is SMTP & IMAP, which exists only where the installation has a mail gateway (the sidebar's rule, read from
+        // a ref so this listener keeps the current one).
+        if (path && (path !== '/smtp-imap' || latest.current.mailGateway)) { event.preventDefault(); go.current(path) }
         return
       }
       armed = key === 'G' && !event.shiftKey ? Date.now() : 0

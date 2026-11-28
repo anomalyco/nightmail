@@ -21,13 +21,16 @@ function SmtpImap() {
   // Which form the page's one Create button opens: an SMTP login, or an app password for a mail app.
   const [creating, setCreating] = useState<'smtp' | 'app' | null>(null)
   const [secret, setSecret] = useState<CreatedSecret | null>(null)
-  const { hash } = useLocation()
-  // #smtp and #imap (⌘K's SMTP settings and IMAP settings) bring their section to the top.
+  const { hash, key } = useLocation()
+  // #smtp and #imap (⌘K's SMTP settings and IMAP settings) bring their section to the top, again when the same one is
+  // asked for while the page is open: each of those is a new history entry (its key changes).
   useEffect(() => {
     if (!hash) return
-    const frame = requestAnimationFrame(() => document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView({ block: 'start' }))
+    let id = hash.slice(1)
+    try { id = decodeURIComponent(id) } catch { /* A malformed hash names no section. */ }
+    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: 'start' }))
     return () => cancelAnimationFrame(frame)
-  }, [hash])
+  }, [hash, key])
   return <div className="stack">
     <PageHeader title="SMTP & IMAP" />
     <div className="keys-sections">

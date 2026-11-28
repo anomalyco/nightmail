@@ -23,8 +23,9 @@ function ApiKeys({ connectLink }: { connectLink: boolean }) {
   const [showRevoked, setShowRevoked] = useState(false)
   const [type, setType] = useState<KeyTypeFilter>('all')
   // Counts only (which types have any): the list itself is KeyTable's.
-  const keys = useApiDef(queries.keys(undefined, showRevoked))
-  const agents = useApiDef(queries.agents(showRevoked))
+  // Placeholder counts while Show inactive refetches: the tabs never lose a type (and KeyTable its tab) in between.
+  const keys = useApiDef(queries.keys(undefined, showRevoked), { keepPrevious: true })
+  const agents = useApiDef(queries.agents(showRevoked), { keepPrevious: true })
   const passwords = useApiDef(queries.appPasswords())
   // /api-keys?create=send&domain=acme.com opens Create key on an API key, filled in (Overview's setup step links here),
   // /api-keys?create=smtp on an SMTP login and /api-keys?create=app on an app password (onboarding's inbox for myself

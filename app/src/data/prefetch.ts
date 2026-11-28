@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { rememberedPageSize } from '../lib/pagination'
-import { useApi, useLogsVisibility, useRegion, useWorkspaceAccess } from './context'
+import { useApi, useLogsVisibility, useRegion, useSession, useWorkspaceAccess } from './context'
 import { queries, type QueryDef } from './queries'
 import { firstOverview, overviewQuery } from '../features/inbound/overview'
 import type { Api } from './types'
@@ -17,12 +17,12 @@ export const sidebarPaths = ['/overview', '/logs', '/receiving', '/campaigns', '
 export const routeChunks: Record<string, () => Promise<unknown>> = {}
 
 // newsletters: whether the workspace has any (Campaigns then leaves their issues out).
-type Scope = { regionId: string; multiTenant: boolean; canAdminister: boolean; newsletters: boolean; logsVisibility: string | null }
+type Scope = { regionId: string; multiTenant: boolean; canAdminister: boolean; newsletters: boolean; logsVisibility: string | null; mailGateway: boolean }
 /** Preloads only the JS chunk for a route (no API requests): used by the idle sweep so opening one page never scans every other page's data. */
 export const preloadRouteChunk = (path: string) => routeChunks[path.startsWith('/newsletters/') ? '/newsletters' : path]?.().catch(() => {}) ?? Promise.resolve()
 
 // The first screen of the page currently opening (cold load). Never runs multi-page loops.
-function firstScreen(path: string, { regionId, multiTenant, canAdminister, newsletters, logsVisibility }: Scope): QueryDef<unknown>[] {
+function firstScreen(path: string, { regionId, multiTenant, canAdminister, newsletters, logsVisibility, mailGateway }: Scope): QueryDef<unknown>[] {
   const scoped = multiTenant || Boolean(regionId)
   // One newsletter's page: the newsletter with its readers, and its newest issues.
   const newsletter = /^\/newsletters\/(?!new$)([^/]+)$/.exec(path)?.[1]
@@ -39,7 +39,7 @@ function firstScreen(path: string, { regionId, multiTenant, canAdminister, newsl
     case '/domains': return multiTenant && canAdminister ? [queries.domains(regionId, 1)] : []
     case '/api-keys': return canAdminister ? [queries.keys(undefined, false), queries.agents(false), queries.appPasswords()] : []
     // SMTP & IMAP: the app passwords under its IMAP settings (the settings themselves come with the session).
-    case '/smtp-imap': return canAdminister ? [queries.appPasswords()] : []
+    case '/smtp-imap': return canAdminister && mailGateway ? [queries.appPasswords()] : []
     // Self-hosted settings load their own region and workspace data; hosted memberships come with the session (/v1/me).
     case '/settings': return !multiTenant || !canAdminister ? [] : [queries.connection(), queries.webhooks(), queries.workspaceMembers(), queries.workspaceInvitations()]
     default: return []
@@ -83,14 +83,15 @@ export function usePrefetchRoute(mode: 'active' | 'hover' = 'active') {
   const { multiTenant, canAdminister } = useWorkspaceAccess()
   const logsVisibility = useLogsVisibility()
   const newsletters = useNewsletters().length > 0
+  const mailGateway = Boolean(useSession()?.identity?.mailServers)
   return useCallback(async (path: string) => {
     const chunk = preloadRouteChunk(path)
-    const defs = (mode === 'hover' ? hoverQueries : firstScreen)(path, { regionId, multiTenant, canAdminister, newsletters, logsVisibility })
+    const defs = (mode === 'hover' ? hoverQueries : firstScreen)(path, { regionId, multiTenant, canAdminister, newsletters, logsVisibility, mailGateway })
     const data = defs.length ? prefetchQueries(cache, api, defs) : undefined
     // The docs read the public API definition, not the workspace's API.
     const docs = path === '/docs' ? cache.prefetchQuery(openApiQuery) : undefined
     await Promise.all([chunk, data, docs])
-  }, [cache, api, mode, regionId, multiTenant, canAdminister, newsletters, logsVisibility])
+  }, [cache, api, mode, regionId, multiTenant, canAdminister, newsletters, logsVisibility, mailGateway])
 }
 
 // Hover intent: a pointer that rests on a link for a moment (not one crossing it) or focuses/presses it warms the chunk
