@@ -399,6 +399,7 @@ export async function reserveMemory(bytes: number, opts: MemoryLeaseOptions = {}
       };
     }
     log('warn', { code: 'ISOLATE_MEMORY_NESTED_GROWTH', heldBytes: outer.bytes, neededBytes: n, route });
+    fitMemoryCaches(n - outer.bytes);
     const delta = makeHold(n - outer.bytes, opts.workspaceId, route, idleMs, maxMs, opts.onReclaim, true, now);
     return wrapHold(delta);
   }

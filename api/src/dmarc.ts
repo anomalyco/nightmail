@@ -1,6 +1,6 @@
 import { ModuleLoadError } from './core.js';
 import { placementRoot } from './domain-registry.js';
-import { dns, fqdn } from './public-dns.js';
+import { dns, fqdn, txtText } from './public-dns.js';
 import type { IdentityFacts } from './states.js';
 import { SEND_LIMITS } from './send-limits.js';
 
@@ -10,8 +10,6 @@ type PolicyRecord = { status:Policy|'invalid'|'missing'; record:string|null; sou
 export type DmarcObservation = PolicyRecord & { checkedAt:number; recommend:boolean; alignedMailFrom:string|null };
 const isPolicy=(p?:string):p is Policy=>p==='none' || p==='quarantine' || p==='reject';
 
-/** A TXT string as one value: its quotes removed and its parts joined. */
-export const unquoteTxt=(s:string)=>s.replace(/^"|"$/g,'').replace(/"\s*"/g,'');
 /**
  * The DMARC record among a _dmarc name's TXT strings, read by RFC 7489: null when there is none; more than one is none
  * that counts (§6.6.3), so it is invalid. Its tags are what it says, first of each name; valid when it keeps the grammar
@@ -19,7 +17,10 @@ export const unquoteTxt=(s:string)=>s.replace(/^"|"$/g,'').replace(/"\s*"/g,'');
  * of DMARC (the stored observation, the support health check, domain findings) decides validity here.
  */
 export function readDmarc(values:string[]):{record:string;tags:Map<string,string>;valid:boolean}|null {
-  const records=values.map(unquoteTxt).filter(s=>/(?:^|;)\s*(?:v\s*=\s*DMARC|p\s*=)/i.test(s));
+  // Records that begin v=DMARC1 are the DMARC records (§6.6.3), whatever else the name publishes (a misplaced DKIM key
+  // has a p= too). Only without one does a near miss (v=DMARC2, p= first) show as an invalid record.
+  const texts=values.map(txtText), dmarc=texts.filter(s=>/^\s*v\s*=\s*DMARC1(?:\s*;|\s*$)/i.test(s));
+  const records=dmarc.length ? dmarc : texts.filter(s=>/(?:^|;)\s*(?:v\s*=\s*DMARC|p\s*=)/i.test(s));
   if(!records.length) return null;
   const record=records.join('\n'), tags=new Map<string,string>();
   if(records.length!==1) return {record,tags,valid:false};

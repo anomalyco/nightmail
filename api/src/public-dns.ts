@@ -13,6 +13,8 @@ export async function boundedJson(url:string,accept:string,signal:AbortSignal,li
 const rr=z.object({name:z.string(),type:z.number(),data:z.string()});
 const dnsResponse=z.object({Status:z.number(),TC:z.boolean().optional(),Answer:z.array(rr).default([]),Authority:z.array(rr).default([])});
 export const fqdn=(s:string)=>s.toLowerCase().replace(/\.$/,'');
+/** A TXT record's text: its quoted strings unescaped and joined (RFC 1035 character-strings), or the data as given when unquoted. */
+export const txtText=(data:string)=>{ const parts=[...data.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m=>m[1]!.replace(/\\(.)/g,'$1')); return parts.length ? parts.join('') : data; };
 /** The CNAME published at `name` itself, not followed; null when there is none (NXDOMAIN or another type). */
 const DOH_ENDPOINTS = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'] as const;
 /** Queries Cloudflare DoH first and falls back to Google Public DNS on resolver failure, SERVFAIL or truncation. */

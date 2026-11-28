@@ -999,10 +999,12 @@ test('capability links: unsubscribe, forward confirm and stop, and sign-in links
   }
 });
 test('DMARC and SPF: a domain claim and its support health check read a record the same way', async t => {
-  const { readDmarc, observeDmarc } = await import('./src/dmarc.js'), { parseDmarc, parseSpf, liveDns } = await import('./src/deliverability.js'), { spfIncludesAmazonSes } = await import('./src/record-check.js');
+  const { readDmarc, observeDmarc } = await import('./src/dmarc.js'), { parseDmarc, parseSpf, liveDns, domainFindings } = await import('./src/deliverability.js'), { spfIncludesAmazonSes, withPublicDns } = await import('./src/record-check.js');
   const cases: [string[], boolean][] = [
     [['v=DMARC1; p=reject; rua=mailto:d@example.com'], true], [['v=DMARC1; p=none', 'v=DMARC1; p=reject'], false], [['v=DMARC1; p=none; sp=bogus'], false],
     [['v=DMARC1; p=none; pct=999'], false], [['v=DMARC1; p=none; adkim=x'], false], [['v=DMARC1; p=none; p=reject'], false], [['p=none; v=DMARC1'], false], [['"v=DMARC1; " "p=quarantine"'], true],
+    // A DKIM key published at _dmarc by mistake has a p= too: beside a real DMARC record it is not a second one.
+    [['v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3', 'v=DMARC1; p=reject'], true],
   ];
   for (const [values, valid] of cases) {
     assert.equal(readDmarc(values)?.valid, valid, values.join(' | '));
@@ -1011,12 +1013,24 @@ test('DMARC and SPF: a domain claim and its support health check read a record t
   // A stored observation of two records keeps both, a line each, and stays invalid when read back (RFC 7489 §6.6.3).
   assert.equal(parseDmarc((readDmarc(['v=DMARC1; p=none', 'v=DMARC1; p=reject'])!.record).split('\n'), 'stored').valid, false);
   // The same two published records, through the claim's observation and the health check's live read.
-  const name = `${randomUUID()}.example.com`;
+  const name = `${randomUUID()}.example.com`, txt = new Map<string, string[]>([[`_dmarc.${name}`, ['v=DMARC1; p=none', 'v=DMARC1; p=reject']]]);
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL) => {
-    const q = new URL(String(input)).searchParams.get('name');
-    return Response.json(q === `_dmarc.${name}` ? { Status: 0, Answer: ['v=DMARC1; p=none', 'v=DMARC1; p=reject'].map(data => ({ name: q, type: 16, data })) } : { Status: 3 });
+    const q = new URL(String(input)).searchParams.get('name')!, data = txt.get(q);
+    return Response.json(data ? { Status: 0, Answer: data.map(data => ({ name: q, type: 16, data: `"${data}"` })) } : { Status: 3 });
   });
   assert.deepEqual([(await observeDmarc(name))?.status, (await liveDns(name, null, null)).dmarc.valid], ['invalid', false]);
+  // Two SPF records at a MAIL FROM are a permerror (RFC 7208 §4.5): Check now never calls the record found.
+  const spfState = async (records: string[]) => {
+    const host = `bounce.${randomUUID()}.example.com`; txt.set(host, records);
+    const record: { name: string; type: 'TXT'; value: string; purpose: string; status: string; publicDns?: import('./src/record-check.js').PublicDns | null } = { name: host, type: 'TXT', value: 'v=spf1 include:amazonses.com ~all', purpose: 'mail_from', status: 'pending' };
+    await withPublicDns({ name: host, dns: [record] });
+    return record.publicDns?.state;
+  };
+  assert.deepEqual([await spfState(['v=spf1 include:amazonses.com ~all']), await spfState(['v=spf1 include:amazonses.com ~all', 'v=spf1 -all'])], ['found', 'wrong_value']);
+  // BIMI needs DMARC at enforcement, and an invalid record enforces nothing whatever its p= says.
+  const bimiReady = (dmarc: string) => !domainFindings(name, { dns: { checkedAt: '', complete: true, spf: parseSpf([]), dmarc: parseDmarc([dmarc], 'live'), bimi: { record: 'v=BIMI1; l=https://x.example/l.svg; a=https://x.example/a.pem', logo: true, authority: true }, mailFrom: null },
+    align: { dmarcPasses: true } as never, days: [], ageDays: null, bulk: [], marketingApi: 0 }).some(f => f.code === 'BIMI_NOT_READY');
+  assert.deepEqual([bimiReady('v=DMARC1; p=reject'), bimiReady('v=DMARC1; p=reject; pct=999')], [true, false]);
   for (const [term, passes] of [['include:amazonses.com', true], ['+include:amazonses.com', true], ['INCLUDE:AmazonSES.com', true], ['-include:amazonses.com', false], ['~include:amazonses.com', false], ['?include:amazonses.com', false], ['include:amazonses.com.evil.example', false]] as const) {
     const record = `v=spf1 ${term} ~all`;
     assert.deepEqual([spfIncludesAmazonSes(record), parseSpf([record]).includesAmazonSes], [passes, passes], term);
@@ -1026,9 +1040,12 @@ test('retries: failures that happened together are spread out, up to each kind o
   const { retryDelay } = await import('./src/ritual-retry.js');
   assert.deepEqual([0, 0.5, 0.999].map(r => retryDelay(3, { capMs: 3_600_000, random: () => r })), [180_000, 240_000, 299_880]);
   // The cap is a ceiling, jitter included: 12 hours for webhooks and rule actions, 15 minutes for a module that failed to
-  // load. Waits at the cap still spread, over its last quarter.
-  assert.deepEqual([0, 0.5, 0.999].map(r => retryDelay(20, { capMs: 12 * 3_600_000, random: () => r })), [9 * 3_600_000, 12 * 3_600_000, 12 * 3_600_000]);
-  assert.deepEqual([0, 0.999].map(r => retryDelay(9, { capMs: 15 * 60_000, random: () => r })), [675_000, 900_000]);
+  // load. Waits at the cap spread evenly over its last quarter, none piled on the cap itself, however many attempts.
+  assert.deepEqual([0, 0.5, 1].map(r => retryDelay(20, { capMs: 12 * 3_600_000, random: () => r })), [9 * 3_600_000, 10.5 * 3_600_000, 12 * 3_600_000]);
+  assert.deepEqual([0, 1].map(r => retryDelay(9, { capMs: 15 * 60_000, random: () => r })), [675_000, 900_000]);
+  assert.equal(retryDelay(1000, { capMs: 12 * 3_600_000, random: () => 0.5 }), 10.5 * 3_600_000, 'A thousandth attempt is still a finite wait.');
+  const capped = Array.from({ length: 400 }, () => retryDelay(30, { capMs: 3_600_000 }));
+  assert.ok(capped.filter(d => d === 3_600_000).length < 10, 'Capped retries are not piled on the cap.');
   assert.equal(retryDelay(1, { capMs: 3_600_000, afterMs: 120_000, random: () => 1 }), 120_000, 'Never sooner than the endpoint asked.');
   const batch = Array.from({ length: 200 }, () => retryDelay(4, { capMs: 3_600_000 }));
   assert.ok(new Set(batch).size > 100 && Math.min(...batch) >= 720_000 && Math.max(...batch) <= 1_200_000, 'A batch of failed webhooks does not come due at one instant.');

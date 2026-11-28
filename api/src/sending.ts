@@ -977,7 +977,7 @@ async function visibleEmailContent(runtime: Runtime,a: Actor,row: typeof emails.
   // Raw MIME can hide tokens inside encodings/folding; only managers receive that opaque content.
   const visible = (value: string | undefined) => value === undefined ? null : manage ? value : redactCapabilityText(value);
   // Sealed Nightmail notices (forward confirmations, sign-in links) carry a capability meant only for the recipient: withheld from every reader.
-  if (row.snapshot.sealed) { const { sealCapabilities } = await import('./mailbox-send.js'); return EmailContent.parse({ untrustedContent, subject: s.subject, html: s.html === undefined ? null : sealCapabilities(s.html), text: s.text === undefined ? null : sealCapabilities(s.text), raw: null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated }); }
+  if (row.snapshot.sealed) { const { sealCapabilities } = await import('./mailbox-send.js'); return EmailContent.parse({ untrustedContent, subject: visible(s.subject), html: s.html === undefined ? null : visible(sealCapabilities(s.html)), text: s.text === undefined ? null : visible(sealCapabilities(s.text)), raw: null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated }); }
   return EmailContent.parse({ untrustedContent, subject: visible(s.subject), html: visible(s.html), text: visible(s.text), raw: manage ? s.raw ?? s.mime ?? null : null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated });
 }
 // Every reader, whatever its permissions, gets an event's data without the content screen's verdict.
@@ -3702,7 +3702,7 @@ export async function rebuildCampaignEmail(runtime: Runtime, a: Actor, stub: Ema
 export async function campaignOutcomes(db: DbExecutor, wid: string, campaignId: string, simulated: boolean) {
   const [row] = (await db.execute<{ accepted: number; bounced: number; complained: number }>(!simulated && await talliesEnabled(db)
     ? sql`SELECT coalesce(sum(accepted), 0)::int AS accepted, coalesce(sum(bounced), 0)::int AS bounced, coalesce(sum(complained), 0)::int AS complained
-        FROM sending_campaign_tallies WHERE workspace_id = ${wid} AND campaign_id = ${campaignId}`
+        FROM sending_campaign_tallies WHERE workspace_id = ${wid} AND campaign_id = ${campaignId} AND NOT simulated`
     : sql`SELECT count(*) FILTER (WHERE ${emailAccepted()})::int AS accepted, count(*) FILTER (WHERE ${emailBounced()})::int AS bounced,
         count(*) FILTER (WHERE ${emailComplained()})::int AS complained FROM sending_emails e WHERE e.workspace_id = ${wid} AND e.campaign_id = ${campaignId}`)).rows;
   return row!;

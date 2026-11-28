@@ -2,7 +2,8 @@ import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, budgetedRead, type DbExecutor, type ReadBudget, type Runtime } from './core.js';
 import { productName } from './brand.js';
 import { hygieneLists } from './list-hygiene.js';
-import { readDmarc, unquoteTxt } from './dmarc.js';
+import { readDmarc } from './dmarc.js';
+import { txtText } from './public-dns.js';
 import { emailAccepted, emailBounced, emailComplained, emailDelivered, emailHas } from './email-outcomes.js';
 import { spfIncludesAmazonSes } from './record-check.js';
 
@@ -361,7 +362,7 @@ type Spf = { record: string | null; records: number; includesAmazonSes: boolean;
 type DmarcTags = { record: string | null; source: 'live' | 'stored' | null; at: string | null; p: string | null; sp: string | null; pct: number | null; adkim: string; aspf: string; rua: boolean; ruf: boolean; valid: boolean };
 export type LiveDns = { checkedAt: string; complete: boolean; spf: Spf; dmarc: DmarcTags; bimi: { record: string | null; logo: boolean; authority: boolean }; mailFrom: { domain: string; mx: string[]; mxExpected: string; spf: Spf } | null };
 export function parseSpf(values: string[]): Spf {
-  const records = values.map(unquoteTxt).filter(v => /^v=spf1(?:\s|$)/i.test(v)), record = records.length === 1 ? records[0]! : null;
+  const records = values.map(txtText).filter(v => /^v=spf1(?:\s|$)/i.test(v)), record = records.length === 1 ? records[0]! : null;
   const terms = record?.split(/\s+/).slice(1) ?? [];
   return { record: records.length ? records.join('\n').slice(0, 500) : null, records: records.length, includesAmazonSes: !!record && spfIncludesAmazonSes(record),
     lookups: terms.filter(t => /^[+~?-]?(?:include:|a(?:[:/]|$)|mx(?:[:/]|$)|ptr|exists:)|^redirect=/i.test(t)).length, all: terms.find(t => /^[+~?-]?all$/i.test(t))?.replace(/^\+/, '') ?? null };
@@ -397,7 +398,7 @@ export async function liveDns(domain: string, mailFrom: { domain: string; region
   const [root, dmarc, bimi, mx, bounce] = await Promise.all([read(domain, 'TXT'), read(`_dmarc.${domain}`, 'TXT'), read(`default._bimi.${domain}`, 'TXT'),
     mailFrom ? read(mailFrom.domain, 'MX') : Promise.resolve([]), mailFrom ? read(mailFrom.domain, 'TXT') : Promise.resolve([])]);
   const liveDmarc = parseDmarc(dmarc, 'live');
-  const bimiRecord = bimi.map(unquoteTxt).find(v => /^v\s*=\s*BIMI1/i.test(v)) ?? null, bimiTags = bimiRecord ? parseTags(bimiRecord) : new Map<string, string>();
+  const bimiRecord = bimi.map(txtText).find(v => /^v\s*=\s*BIMI1/i.test(v)) ?? null, bimiTags = bimiRecord ? parseTags(bimiRecord) : new Map<string, string>();
   const value: LiveDns = { checkedAt: new Date().toISOString(), complete, spf: parseSpf(root),
     // A stored invalid observation keeps every record it saw, one a line.
     dmarc: liveDmarc.record ? liveDmarc : parseDmarc(stored?.record?.split('\n') ?? [], 'stored', stored?.checkedAt ? new Date(stored.checkedAt).toISOString() : null),
@@ -426,7 +427,7 @@ export function domainFindings(name: string, d: { dns: LiveDns | null; align: Aw
   if (d.dns && !dm?.record) out.push({ severity: 'serious', code: 'DMARC_MISSING', scope: name, evidence: {}, message: `${name} publishes no DMARC record. Gmail, Yahoo and Outlook require one from bulk senders: add a TXT at _dmarc.${name}: v=DMARC1; p=none; rua=mailto:dmarc@${name}` });
   else if (dm?.record && !dm.valid) out.push({ severity: 'serious', code: 'DMARC_INVALID', scope: name, evidence: {}, message: `The DMARC record for ${name} does not parse (it needs v=DMARC1 first and a p= of none, quarantine or reject).` });
   else if (dm?.p === 'none' && !dm.rua) out.push({ severity: 'notice', code: 'DMARC_NO_REPORTS', scope: name, evidence: {}, message: `DMARC for ${name} is p=none with no rua: nobody receives reports. Add rua=mailto:… and move to p=quarantine once mail aligns.` });
-  const enforced = !!dm && (dm.p === 'quarantine' || dm.p === 'reject') && (dm.pct ?? 100) === 100;
+  const enforced = !!dm && dm.valid && (dm.p === 'quarantine' || dm.p === 'reject') && (dm.pct ?? 100) === 100;
   if (d.dns?.bimi.record && (!enforced || !d.dns.bimi.authority)) out.push({ severity: 'notice', code: 'BIMI_NOT_READY', scope: name, evidence: { dmarcPct: dm?.pct ?? 0 },
     message: `${name} publishes BIMI, but ${!enforced ? 'DMARC is not at enforcement (BIMI needs p=quarantine or reject at pct=100)' : 'it has no a= (Gmail shows a logo only with a VMC or CMC)'}.` });
   const spf = d.dns?.mailFrom?.spf ?? null;
