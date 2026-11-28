@@ -22,8 +22,9 @@ export const inboxViews: { value: InboxView; label: string; count?: keyof InboxC
 export const viewOf = (search: string): InboxView => { const view = new URLSearchParams(search).get('view'); return view && view !== 'needs_you' ? 'all' : 'needs_you' }
 export const channelOf = (search: string): Channel | '' => { const channel = new URLSearchParams(search).get('channel'); return channel && Object.hasOwn(channelLabels, channel) ? channel as Channel : '' }
 
-// Where a conversation stands, in six labels: three distinct failure states (Not sent, No reply sent, Blocked),
-// Needs you (anything else awaiting staff), Waiting (open, awaiting the customer or agent), and Done.
+// Where a conversation stands, in six states: three distinct failure states (Not sent, No reply sent, Blocked), what
+// staff owe (Needs reply when urgent, Urgent for agent feedback, which has nobody to reply to, Open otherwise), Waiting
+// (open, awaiting the customer or agent), and Done.
 export type Triage = { key: 'failed' | 'no_reply' | 'blocked' | 'needs_you' | 'waiting' | 'done'; text: string; tone: Tone }
 export function triageOf(c: SupportConversation): Triage {
   const reasons = c.needsYou?.reasons
@@ -34,7 +35,7 @@ export function triageOf(c: SupportConversation): Triage {
   if (reasons.includes('failed')) return { key: 'failed', text: 'Not sent', tone: 'danger' }
   if (reasons.includes('no_reply')) return { key: 'no_reply', text: 'No reply sent', tone: 'danger' }
   if (reasons.includes('blocked')) return { key: 'blocked', text: 'Blocked', tone: 'warning' }
-  return { key: 'needs_you', text: 'Needs you', tone: c.needsYou!.urgent ? 'warning' : 'info' }
+  return { key: 'needs_you', text: !c.needsYou!.urgent ? 'Open' : c.channel === 'agent_feedback' ? 'Urgent' : 'Needs reply', tone: c.needsYou!.urgent ? 'warning' : 'info' }
 }
 export function InboxTabs({ view, counts, onChange, disabled = false }: { view: InboxView; counts: InboxCounts | null; onChange?: (view: InboxView) => void; disabled?: boolean }) {
   return <div className="sinbox-tabs"><Tabs value={view} label="Support views" disabled={disabled} onValueChange={value => onChange?.(value as InboxView)}
