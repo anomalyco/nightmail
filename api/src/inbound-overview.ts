@@ -11,7 +11,7 @@
 // withRegionSettings adds one single-row read on hosted regional sending only.
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, denied, errors, response, webhookUrlHint, type App, type Ctx, type MailboxAccess } from './core.js';
+import { ApiError, denied, errors, requiredOf, response, webhookUrlHint, type App, type Ctx, type MailboxAccess } from './core.js';
 import type { mailboxes } from './db/mailbox.js';
 import { domains } from './db/operations.js';
 import { Endpoint, endpointColumns, endpointView, type EndpointRow } from './endpoints.js';
@@ -373,7 +373,7 @@ export function registerInboundOverview(app: App, deps: Deps) {
     responses: { 200: response(z.object({ data: z.array(OverviewEndpoint), nextCursor: z.string().nullable() }).openapi('InboundEndpointPage')), ...errors },
   }), async c => {
     const value = deps.access(c, 'read'), w = value.workspaceId, q = c.req.valid('query'), after = decodeEndpoint(q.cursor);
-    if (!value.admin) throw denied('ADMIN_REQUIRED', 'Endpoints cover every address in the workspace. Use an owner or admin session, or an API key with manage permission on all domains.', { permission: 'receivingRules', level: 'read', scope: 'workspace' });
+    if (!value.admin) throw denied('ADMIN_REQUIRED', 'Endpoints cover every address in the workspace. Use an owner or admin session, or an API key with manage permission on all domains.', { ...requiredOf(c), scope: 'workspace' });
     const result = (await c.env.db.execute<{ config: Partial<Config> | null; programs: Programs | null; rows: ListedEndpoint[] }>(sql`/* inbound endpoints */
       WITH page AS (SELECT ${endpointColumns()} FROM mailbox_webhooks h WHERE h.workspace_id=${w}
           AND (${q.addressId ?? null}::text IS NULL OR (h.type='webhook' AND h.event_types ? 'message.received' AND (h.mailbox_ids IS NULL OR h.mailbox_ids ? ${q.addressId ?? ''})))

@@ -25,7 +25,7 @@ const Receipt = z.object({ jobId: z.string(), status: z.enum(['pending', 'runnin
 const ValidationSettings = z.object({ stream: z.enum(['transactional', 'marketing']), mode: AutoValidationModeSchema.exclude(['inherit', 'unknown']) }).openapi('SesAutoValidationSettings');
 function access(c: Parameters<typeof actor>[0], mutate = false, aws = false) {
   const value = actor(c, mutate ? 'manage' : 'read');
-  if (value.domains.length) throw unrestrictedRequired(value, 'Region settings need', requiredOf(c, mutate ? 'manage' : 'read'));
+  if (value.domains.length) throw unrestrictedRequired(value, 'Region settings need', requiredOf(c));
   if (aws) assertSesConfigured(c.env);
   if (c.env.config.multiTenant && mutate) throw new ApiError(409, 'CONNECTION_MANAGED_REGION', 'Use the workspace sending connection to manage its AWS region.');
   return value;

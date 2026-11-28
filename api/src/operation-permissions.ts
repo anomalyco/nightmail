@@ -1,5 +1,9 @@
-import { PERMISSIONS, type PermissionName } from './core.js';
 import { productName, productSlug } from './brand.js';
+
+/** The permissions a refusal names in error.required, each covering one area of the API. */
+export const PERMISSIONS = { sendEmail: 'Send email', sentMail: 'Sent mail', receivedMail: 'Received mail', inboxes: 'Inboxes', audience: 'Audience & content',
+  receivingRules: 'Receiving rules', configuration: 'Configuration' } as const;
+export type PermissionName = keyof typeof PERMISSIONS;
 
 /**
  * What every operation needs, as data: the permission error.required names (core.ts PERMISSIONS), its level, the scope
@@ -8,8 +12,11 @@ import { productName, productSlug } from './brand.js';
  *
  * A row states what today's guards enforce, not what they should: the acceptance test "permission table" calls every
  * operation with keys, address keys, people, an MCP sign-in and agent tokens, and fails when a row admits or refuses a
- * credential that REST does not. A change to a guard changes its row in the same commit. check-premerge.ts fails on an
- * operation without a row.
+ * credential that REST does not, or when a refusal's error.required names another permission. A change to a guard
+ * changes its row in the same commit. check-premerge.ts fails on an operation without a row.
+ *
+ * Everything else reads its rows: a refusal's error.required and Nightmail-Required-Permission (core.ts requiredOf, by
+ * the operation that answered the request), and the MCP catalog's permission and whether a tool writes (mcp-catalog.ts).
  */
 export const permissionExtension = `x-${productSlug}-permission`;
 export type PermissionLevel = 'on' | 'read' | 'write';

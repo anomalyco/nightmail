@@ -25,6 +25,42 @@ function resolve(doc, node) {
   return node;
 }
 
+// x-nightmail-permission (src/operation-permissions.ts): who may call an operation. Each field below names the callers
+// it admits; a change that admits fewer of the old callers is breaking, one that admits more is not. Absent fields admit
+// everyone. A permission or level is compared only between rows that name one (public and any rows take none).
+const permissionExtension = 'x-nightmail-permission';
+const CALLERS = {
+  // Credential limits a key may have: sender domains, receiving addresses, or none (workspace).
+  scope: { undefined: ['workspace','domain','address'], recipient: ['workspace','domain','address'], domain: ['workspace','domain'], address: ['workspace','address'], workspace: ['workspace'] },
+  // Kinds of credential: a dashboard session, an API key a person made, one an MCP approval made, an MCP sign-in, an agent token.
+  credential: { undefined: ['dashboard','apiKey','delegatedKey','signIn','agentToken'], lasting: ['dashboard','apiKey','delegatedKey','signIn'], notDelegated: ['dashboard','apiKey'], dashboard: ['dashboard'], signIn: ['signIn'] },
+  person: { undefined: ['member','admin','owner'], any: ['member','admin','owner'], admin: ['admin','owner'], owner: ['owner'] },
+};
+const LEVELS = { read: 1, write: 2 };
+function permissionChanges(a, b, at, add) {
+  if (!a || !b) { if (a || b) add(!b,at,`${permissionExtension} ${b ? 'added' : 'removed'}`); return; }
+  const open = row => row.access === 'public' ? 2 : row.access === 'any' ? 1 : 0;
+  const narrowed = [];
+  if (b.access === 'staff' && a.access !== 'staff') narrowed.push('access became staff');
+  else if (open(b) < open(a)) narrowed.push(`access ${a.access} → ${b.access ?? 'a permission'}`);
+  else if (!open(a) && !open(b) && a.access !== 'staff') {
+    for (const field of ['scope','credential','person']) {
+      const admitted = row => CALLERS[field][row[field]] ?? [];
+      const lost = admitted(a).filter(x => !admitted(b).includes(x));
+      if (lost.length) narrowed.push(`${field} ${a[field] ?? 'none'} → ${b[field] ?? 'none'} (refuses ${lost.join(', ')})`);
+    }
+    // An MCP sign-in or agent token needs delegatedLevel where a row has one.
+    const level = (row, delegated) => LEVELS[(delegated && row.delegatedLevel) || row.level] ?? 0;
+    if (a.permission !== b.permission) narrowed.push(`permission ${a.permission ?? 'none'} → ${b.permission ?? 'none'}`);
+    else if (level(b) > level(a)) narrowed.push(`level ${a.level ?? 'none'} → ${b.level}`);
+    else if (level(b, true) > level(a, true)) narrowed.push(`delegatedLevel ${a.delegatedLevel ?? 'none'} → ${b.delegatedLevel}`);
+    if (b.withinCaller && !a.withinCaller) narrowed.push('withinCaller added');
+  }
+  const wire = row => stable(Object.fromEntries(Object.entries(row).filter(([k]) => k !== 'text')));
+  if (narrowed.length) add(true,at,`${permissionExtension} narrowed: ${narrowed.join('; ')}`);
+  else if (wire(a) !== wire(b)) add(false,at,`${permissionExtension} widened`);
+}
+
 function compare(base, head) {
   assert(base.paths && head.paths, 'Expected two OpenAPI documents');
   const changes = [], add = (breaking, where, detail) => changes.push({breaking, message:`${where}: ${detail}`});
@@ -153,6 +189,7 @@ function compare(base, head) {
       if (!x || !y) { if (x || y) add(!y,at,y?'operation added':'operation removed'); continue; }
       const start = changes.length;
       if (x.operationId !== y.operationId) add(true,at,`operationId ${x.operationId} → ${y.operationId}`);
+      permissionChanges(x[permissionExtension],y[permissionExtension],at,add);
       if (!equal(security(x.security ?? base.security),security(y.security ?? head.security))) add(true,at,'security requirements changed');
       const pa = params(base,a,x), pb = params(head,b,y);
       for (const name of keys(pa,pb)) {
@@ -199,6 +236,22 @@ function selfTest() {
   }
   const more = structuredClone(base); more.components.schemas.Item.properties.note={type:'string'};
   assert(compare(base,more).every(x=>!x.breaking));
+  // Permission rows: [before, after, breaking]
+  const row = (permission,level,more={}) => ({permission,level,...more,text:'prose'});
+  for (const [old,next,breaking] of [
+    [row('audience','read'),row('audience','write'),true],[row('audience','write'),row('audience','read'),false],
+    [row('sentMail','read',{scope:'domain'}),row('sentMail','read',{scope:'workspace'}),true],[row('sentMail','read',{scope:'address'}),row('sentMail','read',{scope:'workspace'}),true],
+    [row('sentMail','read',{scope:'workspace'}),row('sentMail','read',{scope:'domain'}),false],[row('receivedMail','read',{scope:'address'}),row('receivedMail','read',{scope:'recipient'}),false],
+    [row('audience','read'),row('audience','read',{person:'admin'}),true],[row('audience','read',{person:'owner'}),row('audience','read',{person:'admin'}),false],
+    [row('configuration','write'),row('configuration','write',{credential:'lasting'}),true],[row('configuration','write',{credential:'dashboard'}),row('configuration','write',{credential:'notDelegated'}),false],
+    [row('configuration','read'),row('configuration','read',{delegatedLevel:'write'}),true],[row('inboxes','write'),row('inboxes','write',{withinCaller:true}),true],
+    [row('sendEmail','on'),row('audience','write'),true],[{access:'public',text:''},row('audience','read'),true],[{access:'any',text:''},{access:'public',text:''},false],
+    [row('audience','read'),{access:'staff',text:''},true],[row('audience','read'),{access:'any',text:''},false],[row('audience','read'),{...row('audience','read'),text:'reworded'},false],
+  ]) {
+    const d0 = structuredClone(base), d1 = structuredClone(base);
+    d0.paths['/x'].post[permissionExtension] = old; d1.paths['/x'].post[permissionExtension] = next;
+    assert.equal(compare(d0,d1).some(x=>x.breaking),breaking,`${stable(old)} → ${stable(next)}`);
+  }
   const string={type:'string'}, num={type:'number'}, nil={type:'null'};
   const choice=(...values)=>({...string,enum:values}), union=(...anyOf)=>({anyOf}), object=(properties)=>({type:'object',properties});
   const doc=(schema,req)=>{

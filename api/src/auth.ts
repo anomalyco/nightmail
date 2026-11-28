@@ -504,7 +504,7 @@ export function registerAuth(app: App) {
     const refusal = agentTokenMintRefusal(identity);
     if (refusal) throw refusal;
     const missing = input.permissions.find(permission => !identity.permissions.includes('manage') && !identity.permissions.includes(permission));
-    if (missing) throw denied('PERMISSION_DENIED', 'The MCP approval does not include every requested permission.', requiredOf(c, missing));
+    if (missing) throw denied('PERMISSION_DENIED', 'The MCP approval does not include every requested permission.', requiredOf(c));
     const outside = input.domains.find(domain => !senderDomainAllowed(identity.domains, domain));
     if (identity.domains.length && (!input.domains.length || outside)) throw denied('SENDER_DOMAIN_FORBIDDEN', 'The temporary token must remain restricted to the approved sender domains or their subdomains.', { permission: 'sendEmail', level: 'on', scope: outside ? `domain:${outside}` : 'workspace' }, 'domains');
     const expiresAt = new Date(Date.now() + input.expiresInSeconds * 1000).toISOString();

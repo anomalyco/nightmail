@@ -11,6 +11,8 @@ import type { ReadyConnection } from './provider-credentials.js';
 import { SECURITY_HEADERS } from './security-headers.js';
 import { clientIpHeader, productName } from './brand.js';
 import { addSesBodySplice } from './ses-body.js';
+import { OPERATION_PERMISSIONS, PERMISSIONS, type OperationPermission, type PermissionName } from './operation-permissions.js';
+export { PERMISSIONS, type PermissionName };
 
 export type Database = NodePgDatabase;
 export const SuppressionReason = z.string().describe('Reason recorded when this send was suppressed. For a multi-recipient send blocked locally, this is the first blocked recipient in To, Cc, Bcc order.');
@@ -394,10 +396,6 @@ export function describeApiFailure(error: unknown) {
 export function apiFailureBody(error: ApiError, requestId: string) {
   return { code: error.code, message: error.message, requestId, retryable: error.retryable, ...(error.field ? { field: error.field } : {}), ...(error.resetAt ? { resetAt: error.resetAt } : {}), ...(error.details ? { details: error.details } : {}), ...(error.required ? { required: error.required } : {}) };
 }
-/** The permissions a refusal names in error.required, each covering one area of the API (requiredFor). */
-export const PERMISSIONS = { sendEmail: 'Send email', sentMail: 'Sent mail', receivedMail: 'Received mail', inboxes: 'Inboxes', audience: 'Audience & content',
-  receivingRules: 'Receiving rules', configuration: 'Configuration' } as const;
-export type PermissionName = keyof typeof PERMISSIONS;
 /**
  * What a refused request needs: the permission the operation takes, and the scope or kind of credential when the refusal
  * is about them. The workspace itself, its members, invitations and billing take no permission: they are a person's, so
@@ -428,36 +426,46 @@ const snake = (value: string) => value.replace(/[A-Z]/g, letter => '_' + letter.
 /** The Nightmail-Required-Permission header: received_mail=read; scope="allAddresses"; credential=not_delegated; person=admin. */
 export const requiredHeaderValue = (r: Required) => [r.permission ? (r.level ? `${snake(r.permission)}=${r.level}` : snake(r.permission)) : r.level && `level=${r.level}`,
   r.scope && `scope="${r.scope.replace(/[^\x20-\x7e]|["\\]/g, '')}"`, r.credential && `credential=${snake(r.credential)}`, r.person && `person=${r.person}`].filter(Boolean).join('; ');
-// Which permission a route belongs to, by method and path (a concrete path or an OpenAPI template); the first match wins.
-const PERMISSION_ROUTES: [PermissionName, RegExp][] = [
-  ['configuration', /^\w+ \/v1\/inboxes\/[^/]+\/app-passwords(?:\/|$)/],
-  ['sendEmail', /^POST \/v1\/(?:emails\/(?:send|batch|check|preview|[^/]+\/(?:cancel|reschedule))|attachments|campaigns\/[^/]+\/(?:test|send|schedule|unschedule|reschedule|pause|resume|pacing|cancel)|domains\/[^/]+\/test-send|inbound\/threads(?:\/[^/]+\/reply)?)$|^DELETE \/v1\/attachments\/[^/]+$/],
-  ['sentMail', /^\w+ \/v1\/(?:emails|events|logs|metrics|sender-score|usage|overview|attachments)(?:\/|$)|^\w+ \/v1\/campaigns\/[^/]+\/stats$/],
-  ['receivedMail', /^\w+ \/v1\/(?:inbound\/(?:messages|threads|events)|inboxes\/[^/]+\/(?:messages|folders|changes|simulate))(?:\/|$)/],
-  ['inboxes', /^\w+ \/v1\/(?:inboxes|inbound\/(?:addresses|retired))(?:\/|$)/],
-  ['audience', /^\w+ \/v1\/(?:contacts|lists|newsletters|segments|topics|contact-imports|audience-query|templates|template-assets|campaign-content-guide|campaigns)(?:\/|$)/],
-  ['receivingRules', /^\w+ \/v1\/(?:routing|rules|endpoints|inbox-connections|inbound\/(?:endpoints|policy|domains|overview))(?:\/|$)|^\w+ \/v1\/domains\/[^/]+\/receiving-host$/],
-];
-/**
- * The permission a request needs at the level a check asks for: a credential's read, send or manage (editContent is
- * manage), an address key's read, send, modify or create, or, without one, read for GET and write otherwise.
- * Everything not listed above is Configuration. The workspace, its members, invitations and billing are an owner's or
- * admin's (person), creating a workspace and accepting an invitation any person's, and staff areas take none.
- */
-export function requiredFor(method: string, path: string, need?: Permission | 'editContent' | import('./db/mailbox.js').MailboxPermission): Required {
-  if (need === 'create') return { permission: 'inboxes', level: 'write' };
-  if (/^\/v1\/(?:operator|support)(?:\/|$)/.test(path)) return {};
-  if (/^\/v1\/(?:workspaces\/current|billing|activity)(?:\/|$)/.test(path)) return { person: 'admin' };
-  if (/^\/v1\/workspaces(?:\/|$)/.test(path)) return {};
-  const verb = method.toUpperCase(), route = `${verb} ${path}`, permission = PERMISSION_ROUTES.find(([, pattern]) => pattern.test(route))?.[0] ?? 'configuration';
-  // send is Send email on sending and sent mail's routes; on another route (a campaign draft, a template preview) it is that
-  // route's permission at write.
-  if (need === 'send' && (permission === 'sendEmail' || permission === 'sentMail')) return { permission: 'sendEmail', level: 'on' };
-  const read = need ? need === 'read' : verb === 'GET' || verb === 'HEAD';
-  if (permission === 'sendEmail') return read ? { permission: 'sentMail', level: 'read' } : { permission, level: 'on' };
-  return { permission, level: read ? 'read' : 'write' };
+// Which operation answers a request: every OpenAPI route as it registers (app.ts), and the few routes outside the
+// OpenAPI document under the operation whose guards they share. Keyed by method and Hono path (/v1/emails/:id). A Worker
+// registers a route group on first use, so a request finds its own route here without loading any other group.
+const ROUTE_OPERATIONS = new Map<string, string>([
+  ['POST /v1/attachments/upload', 'uploadAttachment'], ['GET /v1/logs/facets', 'listLogs'], ['GET /v1/inbound/messages/:messageId/raw', 'getInboundMessage'],
+  ['GET /v1/campaigns/:id/room', 'getCampaign'], ['GET /v1/campaigns/:id/review-display', 'getCampaign'],
+]);
+const routeKey = (method: string, path: string) => `${method.toUpperCase()} ${path.replace(/\{([^}]+)\}/g, ':$1')}`;
+/** Record that an OpenAPI route (its template, /v1/emails/{id}) is this operation. */
+export function recordOperation(method: string, path: string, operationId: string) {
+  const key = routeKey(method, path), known = ROUTE_OPERATIONS.get(key);
+  if (known !== undefined && known !== operationId) throw new Error(`${key} is both ${known} and ${operationId}.`);
+  ROUTE_OPERATIONS.set(key, operationId);
 }
-export const requiredOf = (c: Ctx, need?: Parameters<typeof requiredFor>[2]) => requiredFor(c.req.method, c.req.path, need);
+/** The operation of the route that answers this request (Hono runs the first match), or undefined for an unknown path. */
+export function operationOf(c: Pick<Ctx, 'req'>) {
+  const method = c.req.method === 'HEAD' ? 'GET' : c.req.method;
+  for (const route of c.req.matchedRoutes) {
+    if (route.method !== method && route.method !== 'ALL') continue;
+    const id = ROUTE_OPERATIONS.get(routeKey(method, route.path));
+    if (id) return id;
+  }
+  return undefined;
+}
+/**
+ * What an operation's row (operation-permissions.ts) names as a refusal's error.required: its permission and level (for
+ * a delegated credential, an MCP sign-in or an agent token, the row's delegatedLevel where it has one), or for a person's
+ * operation the role it takes. Callers add the scope, the kind of credential, or the level a person's sign-in lacks
+ * (memberAdminRefusal) when the refusal is about that.
+ */
+export function requiredFrom(row: OperationPermission | undefined, delegated = false): Required {
+  if (!row || row.access) return {};
+  if (row.permission) return { permission: row.permission, level: (delegated && row.delegatedLevel) || row.level };
+  return row.person && row.person !== 'any' ? { person: row.person } : {};
+}
+/** What the operation answering this request needs, for the credential making it. Operator and support routes need none. */
+export const requiredOf = (c: Ctx): Required => {
+  const a = c.get('actor') as Actor | undefined;
+  return requiredFrom(OPERATION_PERMISSIONS[operationOf(c) ?? ''], a?.credential === 'mcp' || a?.credential === 'agentToken');
+};
 /**
  * What a limited credential may do, as one sentence that names its limits: "This key can only send from acme.com." A
  * refusal starts with it, so whoever reads it (often an integration that made a key in onboarding's Send only tab) knows
@@ -628,7 +636,7 @@ export function actor(c: Ctx, action: Permission | 'editContent' = 'read'): Acto
   // original permission contract: send alone does not delegate contact or template management.
   const permission = action === 'editContent' ? (c.env.config.multiTenant && value?.credential === 'dashboard' ? 'send' : 'manage') : action;
   if (!value || (!value.permissions.includes('manage') && !value.permissions.includes(permission))) throw value?.credential === 'apiKey'
-    ? missingPermission(value, permission, requiredOf(c, action)) : denied('PERMISSION_DENIED', `This operation requires ${permission} permission.`, requiredOf(c, action));
+    ? missingPermission(value, permission, requiredOf(c)) : denied('PERMISSION_DENIED', `This operation requires ${permission} permission.`, requiredOf(c));
   return value;
 }
 /**
@@ -647,7 +655,7 @@ export function missingPermission(a: Pick<Actor, 'permissions' | 'domains' | 'cr
  * listing asks lastingRefusal of the same routes (keyAdminRoute, receivingAdminRoute, lastingRoute).
  */
 export function lasting(c: Ctx, what: string) {
-  const refusal = lastingRefusal(c.get('actor'), what, requiredOf(c, 'manage'));
+  const refusal = lastingRefusal(c.get('actor'), what, requiredOf(c));
   if (refusal) throw refusal;
 }
 export const lastingRefusal = (a: Actor | undefined, what: string, need: Required = {}) => a?.credential === 'agentToken'

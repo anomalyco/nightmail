@@ -7,7 +7,7 @@ import { reserveMemory, runInMemoryScope, type MemoryLease } from './isolate-mem
 import { IMPORT_PREVIEW_RATE_PER_MINUTE, importPreviewReservationBytes } from './audience.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { getPath } from 'hono/utils/url';
-import { actor, agentSetupRefusal, budgetExhausted, restrictedArea, filteredInboxPasswords, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute, ApiError, apiFailureBody, describeApiFailure, denied, requiredHeader, requiredHeaderValue, requiredOf, unrestrictedRequired, databaseCodeOf, errorCodeOf, id, lazyModule, log, logError, ModuleLoadError, newRequestId, secureResponse, SECURITY_HEADERS, timed, wrapModuleLoad } from './core.js';
+import { actor, agentSetupRefusal, budgetExhausted, restrictedArea, filteredInboxPasswords, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute, ApiError, apiFailureBody, describeApiFailure, denied, requiredHeader, requiredHeaderValue, requiredOf, unrestrictedRequired, databaseCodeOf, errorCodeOf, id, lazyModule, log, logError, ModuleLoadError, newRequestId, recordOperation, secureResponse, SECURITY_HEADERS, timed, wrapModuleLoad } from './core.js';
 import type { App, Runtime } from './core.js';
 import type { AppEnv, Ctx } from './core.js';
 import { authenticate, registerAuth, requireReceivingConsent } from './auth.js';
@@ -16,7 +16,7 @@ import { countEnqueued } from './jobs.js';
 import { noticeResponse, noticeText, retiringOperations } from './deprecation.js';
 import { countRequest } from './health-counters.js';
 import { SLOW_REQUEST_MS } from './log.js';
-import { authenticatedCreates } from './idempotency.js';
+import { authenticatedCreates, createKeyRoute, withIdempotencyKey } from './idempotency.js';
 import { oldDashboardReference } from './dashboard-reference.js';
 import { addresses, clientIpHeader, headerPrefix, healthService, productName, requestHeaderNames } from './brand.js';
 
@@ -285,6 +285,9 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
   const rawOpenapi = app.openapi;
   app.openapi = ((route, handler, hook) => {
     if (allowPath && !allowPath(route.path)) return app;
+    if (route.operationId) recordOperation(route.method, route.path, route.operationId);
+    // A create the Idempotency-Key middleware covers says so in its contract, which is what the MCP tool's idempotencyKey reads.
+    if (createKeyRoute(route.method, route.path)) route = { ...route, request: { ...route.request, headers: withIdempotencyKey(route.request?.headers) } };
     const replacement = retiringOperations.get(route.operationId ?? '');
     if (route.operationId && replacement !== undefined) {
       retiringRoutes.set(route.method.toUpperCase() + ' ' + route.path.replace(/\{([^}]+)\}/g, ':$1'), route.operationId);

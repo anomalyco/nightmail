@@ -3,7 +3,7 @@ import type { Tool } from '@modelcontextprotocol/server';
 import { agentTokenMintRoute, keyAdminRoute, lastingRoute, mailboxRoute, memberAdminRoute, ownerRoute, receivingAdminRoute, receivingConsentRoute, unrestrictedRoute, type App } from './core.js';
 import { resourceInventory } from './mcp-resources.js';
 import { productName } from './brand.js';
-import { permissionOf } from './operation-permissions.js';
+import { OPERATION_PERMISSIONS, permissionOf, type OperationPermission } from './operation-permissions.js';
 
 type ObjectValue = Record<string, any>;
 /** Toolsets group tools for advertising only; authority comes from the grant and the API. */
@@ -25,7 +25,7 @@ export interface McpOperation {
   readonly untrustedContent?: boolean;
   readonly toolset: Toolset;
   /** The permission REST requires of a workspace credential (manage implies every permission;
-   *  any: no permission check, every authenticated actor). On a mailbox path, mailboxAuth decides instead. */
+   *  any: no permission check, every authenticated actor), from the operation's row. On a mailbox path, mailboxAuth decides instead. */
   readonly permission: 'any' | 'read' | 'send' | 'manage';
   /** REST refuses workspace members (owner/admin areas and receiving administration). */
   readonly ownerOnly: boolean;
@@ -73,8 +73,6 @@ const DASHBOARD_ONLY = ['bindMcpConnection', 'listAgents', 'revokeAgent'] as con
 const EXCLUDED = new Set<string>(['receiveSesSnsEvent', 'receiveCloudFormationSnsEvent', 'revealWebhookSecret', 'downloadInboundAttachment', 'getRuleVersion', ...DASHBOARD_MONEY, ...DASHBOARD_ONLY]);
 // Self-hosted SES region writes: Hosted always refuses these with 409 CONNECTION_MANAGED_REGION.
 const SELF_HOSTED_ONLY = new Set(['configureRegion', 'provisionRegion', 'configureRegionAutoValidation']);
-// POST operations that change nothing: no confirm argument, read-only hint, read permission.
-const READ_ONLY_POSTS = new Set(['testRouting', 'testRules', 'checkRule', 'queryAudience', 'previewSegment', 'previewEmail', 'checkEmail']);
 // Writes whose calls need no confirm argument. Access to every operation is decided by its
 // REST permission below, never by the HTTP method; confirm=true marks only state changes.
 const NO_CONFIRM = new Set(['planAudienceMutation', 'sendFeedback']);
@@ -84,17 +82,14 @@ export const EMAIL_SEND_ROUTING = 'Use sendEmail for one-off sends to 50 or fewe
 export const FEEDBACK_INSTRUCTIONS = `If something in ${productName} gets in your way while you do a task, tell us with sendFeedback: what happened and what would have made it easier. Include the request ID if you have one. One report per distinct problem, then carry on: a question is answered by email to a person, never through the tool.`;
 export const EMAIL_SEND_CONFIRMATION = 'Before sending or scheduling any email, including campaign tests, present the recipients or audience, message content or reviewed campaign revision, and send time, then obtain explicit user confirmation. OAuth access, a request to prepare a draft, or setting confirm=true is not confirmation. Ask again if the recipients, content, or timing changes.';
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
-// Listings must not offer what REST refuses. These mirror the handlers' permission checks where
-// they differ from the method default (reads need read, writes need manage): actor(c, 'send')
-// for email, attachment and campaign work, read-only delegation (a read grant may mint a read
-// agent token; it still needs confirm=true), and manageKeys() reads.
-const SEND_LEVEL = new Set(['sendEmail', 'sendEmailBatch', 'cancelEmail', 'rescheduleEmail', 'uploadAttachment', 'deleteAttachment', 'createCampaign', 'updateCampaign', 'setCampaignArchived', 'deleteCampaign', 'testCampaign', 'sendCampaign', 'scheduleCampaign', 'cancelCampaign', 'unscheduleCampaign', 'rescheduleCampaign', 'pauseCampaign', 'resumeCampaign', 'setCampaignPacing', 'renderCampaignPreviewImage', 'renderCampaignTemplatePreviewImage']);
+// Listings must not offer what REST refuses: a tool's permission is its row's (operation-permissions.ts). Send email is
+// send, a write level is manage, and a read level is read. A POST at a read level changes nothing (a preview, a check, a
+// test: no confirm argument, read-only hint), except these: a read grant mints a read agent token and files feedback.
 const READ_LEVEL_WRITES = new Set(['createAgentToken', 'sendFeedback']);
+const permissionFor = (row: OperationPermission, mailbox: boolean): McpOperation['permission'] =>
+  row.access === 'any' || mailbox ? 'any' : row.permission === 'sendEmail' ? 'send' : row.level === 'write' ? 'manage' : 'read';
 /** Listed for every connection that may call them, whatever toolsets it asked for: an agent reports friction wherever it is. */
 export const ALWAYS_LISTED = new Set(['sendFeedback']);
-const MANAGE_LEVEL_READS = new Set(['listApiKeys', 'listApiKeyChanges', 'listAgentTokens', 'listAppPasswords', 'listBillingLedger', 'listBillingPayments', 'getBillingPayment', 'listActivity']);
-// No permission check in REST: GET /v1/me reads c.get('actor'), so a send-only grant may call it.
-const ANY_AUTHENTICATED = new Set(['getCurrentIdentity']);
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 function invalid(message: string): never { throw new Error(`Invalid MCP catalog: ${message}`); }
 function object(value: unknown): value is ObjectValue { return value !== null && typeof value === 'object' && !Array.isArray(value); }
@@ -125,15 +120,34 @@ function reference(spec: ObjectValue, value: ObjectValue): ObjectValue {
 function toolParameters(spec: ObjectValue, item: ObjectValue, operation: ObjectValue) {
   return [...(item.parameters ?? []), ...(operation.parameters ?? [])].map(p => reference(spec, p)).filter(p => !(p.in === 'query' && p.name === 'includeDelivery'));
 }
-function inputSchema(spec: ObjectValue, item: ObjectValue, operation: ObjectValue, write: boolean): Tool['inputSchema'] | undefined {
+// Tool arguments that are not API parameters: the body and the headers below, and the envelope a call is wrapped in (a
+// plain resource tool's action, a sign-in's workspace), which mcp.ts takes off before the rest reach the API. A path or
+// query parameter with one of these names needs an alias (aliasesFor), or the catalog fails to build.
+const RESERVED = new Set(['body', 'confirm', 'idempotencyKey', 'ifMatch', 'action', 'workspace']);
+// Query parameters an envelope name would take: Activity's action filter is auditAction.
+const QUERY_ALIASES: Record<string, Record<string, string>> = { listActivity: { action: 'auditAction' } };
+/** What a tool calls each API parameter it renames: {id} by its resource, {v} as version, a poll page's after as cursor. */
+function aliasesFor(name: string, path: string, pollPage: boolean): Record<string, string> {
+  const aliases: Record<string, string> = { ...QUERY_ALIASES[name] };
+  if (path.includes('/{id}')) aliases.id = PATH_IDS[path.split('/{id}')[0].split('/').at(-1)!] ?? invalid(`Missing ID name for ${path}`);
+  if (path.includes('/{v}')) aliases.v = 'version';
+  if (pollPage) aliases.after = 'cursor';
+  return aliases;
+}
+/** Whether the operation honors Idempotency-Key: its contract declares the header (idempotency.ts). */
+const takesIdempotencyKey = (parameters: ObjectValue[]) => parameters.some(p => p.in === 'header' && p.name.toLowerCase() === 'idempotency-key');
+function inputSchema(spec: ObjectValue, item: ObjectValue, operation: ObjectValue, write: boolean, aliases: Record<string, string>): Tool['inputSchema'] | undefined {
   const properties: ObjectValue = Object.create(null);
   const required: string[] = [];
   const parameters = toolParameters(spec, item, operation);
-  for (const p of parameters.filter(p => p.in === 'path' || p.in === 'query')) {
+  const named = parameters.filter(p => p.in === 'path' || p.in === 'query');
+  for (const [api, mcp] of Object.entries(aliases)) if (!named.some(p => p.name === api)) invalid(`Alias ${mcp} names no parameter ${api}.`);
+  for (const p of named) {
     if (typeof p.name !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(p.name) || !object(p.schema)) invalid('Unsupported OpenAPI parameter.');
-    if (Object.hasOwn(properties, p.name) || ['body', 'confirm', 'idempotencyKey', 'ifMatch'].includes(p.name)) invalid('Conflicting OpenAPI parameter name.');
-    properties[p.name] = p.schema;
-    if (p.required || p.in === 'path') required.push(p.name);
+    const name = Object.hasOwn(aliases, p.name) ? aliases[p.name] : p.name;
+    if (Object.hasOwn(properties, name) || RESERVED.has(name)) invalid(`Conflicting OpenAPI parameter name ${p.name}.`);
+    properties[name] = p.schema;
+    if (p.required || p.in === 'path') required.push(name);
   }
   // If-Match becomes ifMatch (optimistic concurrency: pass the version you read). Other headers are not tool arguments.
   if (parameters.some(p => !['path', 'query', 'header'].includes(p.in) || (p.in === 'header' && p.required && !['idempotency-key', 'if-match'].includes(p.name.toLowerCase())))) invalid('Unsupported API parameter location.');
@@ -157,8 +171,11 @@ function inputSchema(spec: ObjectValue, item: ObjectValue, operation: ObjectValu
   }
   if (write) {
     properties.confirm = { type: 'boolean', const: true, description: 'Explicit authorization to perform this write. Required; not a dry run.' };
-    properties.idempotencyKey = { type: 'string', minLength: 1, maxLength: 200, pattern: '^[\\x21-\\x7E]+$', description: 'Reuse only for an identical retry. 409 IDEMPOTENCY_IN_PROGRESS: the first is still running; retry after Retry-After with the same key.' };
     required.push('confirm');
+  }
+  // Only where REST honors the key: offered elsewhere, a retry with it would still write twice.
+  if (takesIdempotencyKey(parameters)) {
+    properties.idempotencyKey = { type: 'string', minLength: 1, maxLength: 200, pattern: '^[\\x21-\\x7E]+$', description: 'Reuse only for an identical retry. 409 IDEMPOTENCY_IN_PROGRESS: the first is still running; retry after Retry-After with the same key.' };
     if (operation.operationId === 'createInboundThread' || operation.operationId === 'replyToInboundThread') required.push('idempotencyKey');
   }
   return localSchema(spec, { type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) });
@@ -281,7 +298,7 @@ const DESCRIPTIONS: Record<string, string> = {
   createWorkspaceInvitation: 'Invite an email address as admin or member (owners are invited in the dashboard). The invitee is emailed the link when emailed is true (Hosted, within the day’s allowance); otherwise share the returned acceptUrl with them yourself: it is shown only here. They join by signing in with that verified address within 7 days.',
   listWorkspaceInvitations: 'List pending invitations: address, role and expiry. An invitation\'s link is shown only when it is made.',
   revokeWorkspaceInvitation: 'Revoke the pending invitation for an email address; its link stops working. Only an owner revokes an owner invitation.',
-  listActivity: 'Read the workspace’s audit trail, newest first: who changed members, keys, domains, webhooks, routes, rules and settings, and when support viewed it. Filter by since, until, action, actorType, actorId or requestId. Only an owner’s or admin’s own sign-in approved for manage.',
+  listActivity: 'Read the workspace’s audit trail, newest first: who changed members, keys, domains, webhooks, routes, rules and settings, and when support viewed it. Filter by since, until, auditAction, actorType, actorId or requestId. Only an owner’s or admin’s own sign-in approved for manage.',
   createWebhook: 'Subscribe a public HTTPS URL to sending events. Set up over MCP it delivers only while this approval is active and is paused when the approval is removed (approval.endsAt); a lasting webhook is made in the dashboard.',
   createInboundWebhook: 'Subscribe a public HTTPS URL to inbound mail events, signed with Standard Webhooks headers. Set up over MCP it delivers only while this approval is active and is paused when the approval is removed (approval.endsAt); a lasting webhook is made in the dashboard.',
 };
@@ -344,22 +361,15 @@ export function buildMcpCatalog(app: App): ReadonlyMap<string, McpOperation> {
       if (EXCLUDED.has(name)) continue;
       if (!operation.security?.some((entry: unknown) => object(entry) && Array.isArray(entry.bearerAuth)) && !memberAdminRoute(method, path)) continue;
       if (operations.has(name) || operations.size >= 256) invalid('Duplicate operationId or too many tools.');
-      const write = method !== 'get' && !READ_ONLY_POSTS.has(name);
+      const row = OPERATION_PERMISSIONS[name] ?? invalid(`${name} has no permission row.`);
+      const write = method !== 'get' && (row.level !== 'read' || READ_LEVEL_WRITES.has(name));
       const confirm = write && !NO_CONFIRM.has(name);
-      const input = inputSchema(spec, item as ObjectValue, operation, confirm);
-      if (!input) continue; // Never offer reply without the expected-recipient guard.
-      const props = input.properties!;
       const queryParameters = toolParameters(spec, item as ObjectValue, operation).filter(p => p.in === 'query').map(p => p.name as string);
       const pollPage = queryParameters.includes('after');
-      const aliases: Record<string, string> = {};
-      if (path.includes('/{id}')) aliases.id = PATH_IDS[path.split('/{id}')[0].split('/').at(-1)!] ?? invalid(`Missing ID name for ${path}`);
-      if (path.includes('/{v}')) aliases.v = 'version';
-      if (pollPage) aliases.after = 'cursor';
-      for (const [api, mcp] of Object.entries(aliases)) {
-        if (!Object.hasOwn(props, api) || Object.hasOwn(props, mcp)) invalid(`Conflicting alias ${mcp} for ${name}`);
-        props[mcp] = props[api]; delete props[api];
-        if (input.required) input.required = input.required.map(p => p === api ? mcp : p);
-      }
+      const aliases = aliasesFor(name, path, pollPage);
+      const input = inputSchema(spec, item as ObjectValue, operation, confirm, aliases);
+      if (!input) continue; // Never offer reply without the expected-recipient guard.
+      const props = input.properties!;
       if (name === 'enableInboundDomain') {
         delete props.body; delete props.idempotencyKey; delete input.$defs;
         input.required = ['domainId', 'confirm'];
@@ -384,7 +394,7 @@ export function buildMcpCatalog(app: App): ReadonlyMap<string, McpOperation> {
       freeze(tool);
       // The path guards are REST's own predicates (core.ts). On a mailbox path mailboxAuth, not a permission, decides.
       const mailbox = mailboxRoute(path);
-      const permission = ANY_AUTHENTICATED.has(name) || mailbox ? 'any' : MANAGE_LEVEL_READS.has(name) ? 'manage' : SEND_LEVEL.has(name) ? 'send' : READ_LEVEL_WRITES.has(name) ? 'read' : write ? 'manage' : 'read';
+      const permission = permissionFor(row, mailbox);
       const ownerOnly = receiving || ownerRoute(method, path);
       operations.set(name, Object.freeze({ tool, method, path, queryParameters, write, confirm, apiArgs, pollPage, toolset, receiving, inbound: receiving || toolset === 'inboxes', inbox: INBOX_PERMISSIONS[name], untrustedContent: UNTRUSTED_READS.has(name), permission, ownerOnly, mailbox,
         receivingConsent: receivingConsentRoute(path), unrestricted: unrestrictedRoute(path), keyAdmin: keyAdminRoute(method, path), agentTokenMint: agentTokenMintRoute(method, path),

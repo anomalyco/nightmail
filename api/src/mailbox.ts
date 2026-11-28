@@ -37,10 +37,10 @@ const loadMailboxSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
 function access(c: Ctx, permission?: MailboxPermission): MailboxAccess {
   const value = c.get('mailboxAccess');
   if (!value) throw new ApiError(401, 'AUTH_REQUIRED', `Supply a ${productName} API key.`);
-  if (permission && !value.admin && !value.permissions.includes(permission)) throw denied('PERMISSION_DENIED', `This operation requires ${permission} permission.`, requiredOf(c, permission));
+  if (permission && !value.admin && !value.permissions.includes(permission)) throw denied('PERMISSION_DENIED', `This operation requires ${permission} permission.`, requiredOf(c));
   return value;
 }
-function admin(c: Ctx) { const value = access(c); if (!value.admin) throw denied('ADMIN_REQUIRED', 'This operation requires an owner or admin, or an API key with manage permission on all domains.', { ...requiredOf(c, 'manage'), scope: 'workspace' }); return value; }
+function admin(c: Ctx) { const value = access(c); if (!value.admin) throw denied('ADMIN_REQUIRED', 'This operation requires an owner or admin, or an API key with manage permission on all domains.', { ...requiredOf(c), scope: 'workspace' }); return value; }
 /** A change to receiving hosts outlives the credential making it: an administrator, never a temporary agent token (lastingRoute). */
 function hostAdmin(c: Ctx) { const value = admin(c); lasting(c, RECEIVING_HOST_CHANGE); return value; }
 const scopeOf = (value: MailboxAccess): Scope => ({ workspaceId: value.workspaceId });
