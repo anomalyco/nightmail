@@ -13,6 +13,7 @@ COPY api/package.json api/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY api/tsconfig*.json api/worker-configuration.d.ts ./
 COPY api/src ./src
+COPY api/generated ./generated
 RUN bun run build
 
 FROM bun AS production-deps
@@ -27,6 +28,7 @@ COPY --from=production-deps /app/node_modules ./node_modules
 COPY api/package.json ./
 COPY --from=build /app/dist ./dist
 COPY --from=dashboard /dashboard/dist ./public
+COPY api/generated ./generated
 COPY api/migrations ./migrations
 USER node
 EXPOSE 8787

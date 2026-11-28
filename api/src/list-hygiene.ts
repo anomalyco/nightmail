@@ -54,7 +54,7 @@ export const PUBLIC_MAILBOXES = new Set(`gmail.com googlemail.com outlook.com ho
   att.net sbcglobal.net cox.net orange.fr free.fr laposte.net t-online.de libero.it naver.com daum.net seznam.cz wp.pl o2.pl btinternet.com sky.com`.split(/\s+/));
 
 // ----- The lists -----------------------------------------------------------------------------------------------------------
-// The nightly sync's lists (hygiene_lists 'built'), else the vendored snapshot (src/hygiene-snapshot.ts, only imported then).
+// The nightly sync's lists (hygiene_lists 'built'), else the vendored snapshot (generated/hygiene-snapshot.json, only imported then).
 // Held per isolate and checked against the stored version every ten minutes: a sorted string and its line offsets (about
 // 2 MB for 110,000 domains), searched by halving, not a Set of them.
 export type HygieneLists = { version: string; source: 'synced' | 'snapshot'; isDisposable(domain: string): boolean; providers: Set<string>; roles: string[] };
@@ -74,6 +74,7 @@ export function makeLists(built: Pick<BuiltLists, 'version' | 'disposable' | 'pr
     // A domain or one it is under (sub.mailinator.com), never one the allowlist names.
     isDisposable: domain => { for (let name = domain.toLowerCase(); name.includes('.'); name = name.slice(name.indexOf('.') + 1)) { if (ALLOWED.has(name)) return false; if (has(name)) return true; } return false; } };
 }
+const loadHygieneSnapshot = async (): Promise<BuiltLists> => (await import('../generated/hygiene-snapshot.js')).HYGIENE_SNAPSHOT;
 let held: { lists: HygieneLists; checkedAt: number } | undefined, loading: Promise<HygieneLists> | undefined;
 const LISTS_CHECK_MS = 10 * 60_000;
 /** The lists this isolate already holds, without reading anything: for the send path and sign-ins. */
@@ -88,8 +89,8 @@ export function hygieneLists(db: DbExecutor): Promise<HygieneLists> {
         const [row] = (await db.execute<{ version: string; body: string; meta: { providers: string[]; roles: string[] } }>(sql`SELECT version, body, meta FROM hygiene_lists WHERE name = 'built'`)).rows;
         if (row) { held = { lists: makeLists({ version: row.version, disposable: row.body, ...row.meta }, 'synced'), checkedAt: Date.now() }; return held.lists; }
       }
-      const { HYGIENE_SNAPSHOT } = await import('./hygiene-snapshot.js');
-      held = { lists: makeLists(HYGIENE_SNAPSHOT, 'snapshot'), checkedAt: Date.now() };
+      const snapshot = await loadHygieneSnapshot();
+      held = { lists: makeLists(snapshot, 'snapshot'), checkedAt: Date.now() };
       return held.lists;
     } finally { loading = undefined; }
   })();
@@ -318,14 +319,14 @@ export async function syncHygieneLists(runtime: Pick<Runtime, 'db' | 'config'>, 
   }
   // The snapshot's providers stay on the allowlist for good: a providers source that drops a real provider (or is emptied)
   // never puts it on the disposable list. A source never fetched is covered by the snapshot's union.
-  const { HYGIENE_SNAPSHOT } = await import('./hygiene-snapshot.js');
+  const snapshot = await loadHygieneSnapshot();
   const missing = SOURCES.filter(s => !copies.some(c => c.name === s.name));
   if (missing.length) {
-    copies.push({ name: missing.find(s => s.kind === 'disposable')?.name ?? missing[0]!.name, entries: HYGIENE_SNAPSHOT.disposable.split('\n'), sha256: HYGIENE_SNAPSHOT.version, bytes: 0, fetchedAt: HYGIENE_SNAPSHOT.builtAt });
-    for (const s of missing.filter(s => s.kind !== 'disposable')) copies.push({ name: s.name, entries: s.kind === 'roles' ? HYGIENE_SNAPSHOT.roles : HYGIENE_SNAPSHOT.providers,
-      ...s.kind === 'providers' ? { mx: HYGIENE_SNAPSHOT.providerMx } : {}, sha256: HYGIENE_SNAPSHOT.version, bytes: 0, fetchedAt: HYGIENE_SNAPSHOT.builtAt });
+    copies.push({ name: missing.find(s => s.kind === 'disposable')?.name ?? missing[0]!.name, entries: snapshot.disposable.split('\n'), sha256: snapshot.version, bytes: 0, fetchedAt: snapshot.builtAt });
+    for (const s of missing.filter(s => s.kind !== 'disposable')) copies.push({ name: s.name, entries: s.kind === 'roles' ? snapshot.roles : snapshot.providers,
+      ...s.kind === 'providers' ? { mx: snapshot.providerMx } : {}, sha256: snapshot.version, bytes: 0, fetchedAt: snapshot.builtAt });
   }
-  const built = buildLists(copies, HYGIENE_SNAPSHOT.providers);
+  const built = buildLists(copies, snapshot.providers);
   const version = built.version;
   const [prev] = (await db.execute<{ version: string; body: string; meta: { providers?: string[] } }>(sql`SELECT version, body, meta FROM hygiene_lists WHERE name = 'built'`)).rows;
   if (prev && prev.version !== version && !acceptChange) {

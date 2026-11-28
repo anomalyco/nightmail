@@ -1,6 +1,6 @@
 // The open lists list hygiene is built from (docs/list-hygiene.md), each with its license. Only permissive licenses (CC0,
 // MIT, BSD-3-Clause): no GPL list is fetched or vendored. Fetched from GitHub raw by the nightly sync (syncHygieneLists in
-// list-hygiene.ts) and by scripts/update-hygiene-snapshot.ts, which writes the vendored fallback (src/hygiene-snapshot.ts).
+// list-hygiene.ts) and by scripts/update-hygiene-snapshot.ts, which writes the vendored fallback (generated/hygiene-snapshot.json).
 // Never fetched at send time.
 import { createHash } from 'node:crypto';
 
