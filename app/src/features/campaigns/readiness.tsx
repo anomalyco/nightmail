@@ -48,7 +48,7 @@ export function ReadinessPanel({ readiness, start, choice, onChoice, consent, on
         <ol className="send-plan" aria-label="Daily batches">
           {plan.batches.map((batch, day) => <li key={day}><span>{day === 0 && start <= Date.now() + 60_000 ? `Today, ${dayLabel(start)}` : dayLabel(start + day * DAY_MS)}</span><span>{number(batch)}</span></li>)}
         </ol>
-        {plan.seconds !== null && <p className="review-detail">Estimated finish {finishLabel(start + plan.seconds * 1000)}. The most engaged recipients go first, people never mailed before last, and sending pauses by itself if bounces or complaints climb.</p>}
+        {plan.seconds !== null && <p className="review-detail">Estimated finish {finishLabel(start + plan.seconds * 1000)}. Sending pauses by itself if bounces or complaints climb.</p>}
       </>}
     </>}
     {needsConsent && <div className="send-consent">
@@ -65,7 +65,6 @@ export function ReadinessPanel({ readiness, start, choice, onChoice, consent, on
       <dt>List</dt><dd>{listLine}</dd>
       {readiness.sizeJump !== null && readiness.sizeJump > 1 && <><dt>Size</dt><dd>{number(Math.round(readiness.sizeJump))}× this domain’s largest campaign</dd></>}
     </dl>
-    {domain.ownLinkHost && !domain.ownLinkHost.active && domain.linkOrigin && <p className="campaign-note" data-tone="warning"><span>Links in this campaign go on {hostOf(domain.linkOrigin)}, not {domain.ownLinkHost.hostname}: that link host isn’t set up yet. Copies made once it is go there.</span></p>}
     {(readiness.findings ?? readiness.reasons).length > 0 && <ul className="campaign-notes" aria-label="What the review found">{(readiness.findings ?? readiness.reasons).map(reason => <li key={reason.code} className="campaign-note"><span>{reason.message}</span></li>)}</ul>}
   </section>
 }
