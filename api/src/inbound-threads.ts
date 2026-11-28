@@ -378,7 +378,8 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
   app.openapi(createRoute({ method: 'get', path: base, operationId: 'listInboundThreads', tags, security, summary: 'List visible conversations',
     description: 'Newest visible activity first, then descending thread ID. addressId narrows all projected messages and IDs. q searches visible messages; view matches state on any visible address. all (default) includes trash. Pass nextCursor to continue. ' + readLimitNote(INBOUND_READ),
     request: { query: ListQuery }, responses: { 200: response(page(Thread).openapi('InboundThreadPage')), ...errors } }), async c => {
-    const q = c.req.valid('query'), value = access(c, 'read'); return c.json(await budgetedRead(c.env.db, db => threadPage(db, value, q, q), readLimit(INBOUND_READ)), 200);
+    const q = c.req.valid('query'), value = access(c, 'read');
+    return await withBoundedRead(c, async () => c.json(await budgetedRead(c.env.db, db => threadPage(db, value, q, q), readLimit(INBOUND_READ)), 200), { route: 'inbound.listThreads', workspaceId: value.workspaceId }) as never;
   });
   app.openapi(createRoute({ method: 'get', path: `${base}/{threadId}`, operationId: 'getInboundThread', tags, security, summary: 'Read a visible conversation',
     description: 'Returns the most recent visible messages (default 25, maximum 100), oldest first within the page. Ties use message ID. Pages are also bounded by response size and may return fewer than limit messages; pass nextCursor as cursor for the older page. Body previews are capped at 8192 characters and address/reference lists at 20 items (with total counts in toCount, ccCount, replyToCount and referencesCount); getInboundMessage retrieves stored text, up to 100 addresses and attachment metadata. State and counts are scoped to visible addresses. ' + readLimitNote(INBOUND_READ),

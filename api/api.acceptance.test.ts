@@ -1430,11 +1430,22 @@ test('OIDC dashboard callback verifies the token, consumes bound state once and 
   assert.ok(accepted.headers.getSetCookie().some(c=>c.startsWith('__Host-nightmail.session_token=')));
   assert.equal((await (await request('/v1/me','GET',newSession)).json() as {email:string}).email,email);
   assert.equal((await request(`/v1/workspaces/invitations/${oldInvitation}/accept`,'POST',newSession,{})).status,404);
-  verified=false;const unverified=await login();assert.equal((await db.query('SELECT email_verified FROM nightmail_users WHERE id=$1',[me.id])).rows[0].email_verified,false);
-  // An address change ends older sessions; the new session of the same admitted subject works without a verified address.
+  // An address the provider doesn't vouch for never replaces the verified one, the same address or another, so nothing
+  // changes and older sessions stay; the admitted subject still signs in.
+  verified=false;const vouched=email;
+  for (const asserted of [vouched,`spoofed-${randomUUID()}@example.org`]) {
+    email=asserted;const unverified=await login();
+    assert.deepEqual((await db.query('SELECT email,email_verified FROM nightmail_users WHERE id=$1',[me.id])).rows[0],{email:vouched,email_verified:true},asserted);
+    const unverifiedSession=unverified.headers.getSetCookie().find(v=>v.startsWith('__Host-nightmail.session_token='))!.split(';')[0]!;
+    assert.equal((await request('/v1/me','GET',unverifiedSession)).status,200);
+  }
+  assert.equal((await request('/v1/me','GET',newSession)).status,200);
+  // A user whose address was never verified still takes the one its sign-in asserts.
+  await db.query('UPDATE nightmail_users SET email_verified=false WHERE id=$1',[me.id]);
+  const asserted=`asserted-${randomUUID()}@example.org`;email=asserted;await login();
+  assert.deepEqual((await db.query('SELECT email,email_verified FROM nightmail_users WHERE id=$1',[me.id])).rows[0],{email:asserted,email_verified:false});
+  // An address change ends older sessions.
   assert.equal((await request('/v1/me','GET',newSession)).status,401);
-  const unverifiedSession=unverified.headers.getSetCookie().find(v=>v.startsWith('__Host-nightmail.session_token='))!.split(';')[0]!;
-  assert.equal((await request('/v1/me','GET',unverifiedSession)).status,200);
   verified=true;subject=randomUUID();subjects.push(subject);email=approved;
   const reassigned=await login();const reassignedSession=reassigned.headers.getSetCookie().find(v=>v.startsWith('__Host-nightmail.session_token='))!.split(';')[0]!;
   assert.deepEqual(await waitlisted(approved),[],'Admitted with its verified address, it leaves the waitlist');
@@ -4492,6 +4503,17 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
       }
       const ownerEmail=address(), otherEmail=address(), guestEmail=address();
       const a=await workspaceFixture(ownerEmail,true), b=await workspaceFixture(otherEmail,true), guest=(await workspaceFixture(guestEmail,false)).cookie;
+      await mx.test('only a member’s verified address blocks an invitation to it', async () => {
+        const owner = await workspaceFixture(address(), true), email = address().toLowerCase(), member = await seedSession(authDb!, { email, verified: false });
+        cleanup(t, async () => { await pool.query('DELETE FROM nightmail_users WHERE id=$1', [member.userId]); });
+        await pool.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')", [randomUUID(), member.userId, owner.org.id]);
+        const invite = () => local('POST', `${base}/invitations`, { email, role: 'member' }, owner.cookie, select(owner.org.id));
+        // An address a sign-in asserted without verifying is anyone's to claim: the person who owns it can still be invited.
+        const made = ok(await invite(), 201);
+        await pool.query('DELETE FROM workspace_invitations WHERE id=$1', [made.id]);
+        await pool.query('UPDATE nightmail_users SET email_verified=true WHERE id=$1', [member.userId]);
+        error(await invite(), 409, 'ALREADY_INVITED_OR_MEMBER');
+      });
       await mx.test('deprecation notices preserve invitation responses and count only the older route', async t => {
         const owner = await workspaceFixture(address(), true);
         let resolve!: () => void;
@@ -7802,6 +7824,33 @@ describe('Hosted MCP OAuth and tools', () => {
     });
   });
 
+  test('R1: a grant cannot rewrite what another owner’s attached rule runs or reads, so revoking it leaves that rule working', async t => {
+    await simulatedSesFixture(t,async({db,local,request})=>{
+      const {token,consentId}=await oauthGrant(t,db,writableScope,request);
+      const box=ok(await local('POST','/v1/inboxes',{type:'sandbox'}),201),path='/v1/rules';
+      const rules=[{key:'listed',source:'export default function route(email){if(lists.has("deny",email.from.address)) block()}'},{key:'scored',source:'export default function route(email){const r=omens(email,{q:"Is review needed?"});if(r.q>0.5) label("review")}'},{key:'loose',source:'export default function route(email){label("loose")}'}];
+      ok(await local('PUT',path,{rules,attachments:['scored','listed'].map(rule=>({target:box.address,rule,continue:true})),senderLists:{deny:['spam@example.invalid'],spare:['other@example.invalid']},evaluateDomains:[box.address.split('@')[1]]}));
+      const saved=ok(await local('GET',path));
+      const key=ok(await request('POST','/mcp?codemode=true',token,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'createApiKey',arguments:{confirm:true,body:{name:'R1 source fixture',permissions:['manage']}}}},rpcHeaders)).result.structuredContent.secret;secrets.add(key);
+      const apply=(change:Json)=>request('PUT',path,key,{...saved.config,...change});
+      for(const [reply,field] of [
+        [await request('PUT',path+'/scripts/listed',key,{key:'listed',source:'export default function route(email){}'}),'rules'],
+        [await apply({rules:rules.map(r=>r.key==='scored'?{...r,source:'export default function route(email){label("hijacked")}'}:r)}),'rules'],
+        [await apply({senderLists:{...saved.config.senderLists,deny:['nobody@example.invalid']}}),'senderLists'],
+        [await apply({evaluateDomains:[]}),'evaluateDomains'],
+        [await request('PUT',path+'/decisions',key,{evaluateDomains:[],evaluateRoutes:[]}),'evaluateDomains'],
+      ] as const) { error(reply,403,'RULE_BINDING_NOT_OWNED'); assert.equal(reply.body.error.field,field); }
+      // Removing a list the rule reads leaves a rule that doesn't compile, refused before ownership is asked.
+      error(await apply({senderLists:{spare:saved.config.senderLists.spare}}),422,'RULE_INVALID');
+      assert.equal(ok(await local('GET',path)).version,saved.version,'Nothing was saved.');
+      // What no attached rule of another owner runs or reads stays the approval's to change.
+      ok(await apply({rules:rules.map(r=>r.key==='loose'?{...r,source:'export default function route(email){label("mine")}'}:r),senderLists:{...saved.config.senderLists,spare:['changed@example.invalid']}}));
+      ok(await local('POST','/v1/agents/mcp_'+consentId+'/revoke'));
+      const dry=ok(await local('POST',path+'/test',{mime:`From: spam@example.invalid\r\nTo: ${box.address}\r\nSubject: fixture\r\n\r\nfixture`})).recipients[0];
+      assert.equal(dry.dropped,true,'The other owner’s rule and its list still block after the revocation.');
+    });
+  });
+
   // tear witnesses (2 steps): mint grant2; probe grant2 code -> a member's read+send grant listed createContactList, createApiKey,
   // createAgentToken and listApiKeys; mint grant; probe grant code -> listMcpConnections (since removed; listAgents is its
   // successor). REST refuses all of them.
@@ -8114,11 +8163,13 @@ describe('Hosted MCP OAuth and tools', () => {
       const {token,consentId}=await oauthGrant(t,db,writableScope,request);
       const boxes:string[]=[];for(let n=0;n<3;n++)boxes.push(ok(await local('POST','/v1/inboxes',{type:'sandbox'}),201).address);
       const rituals=[{key:'listed',source:'export default function route(email){if(lists.has("deny",email.from.address)) block()}'},{key:'scored',source:'export default function route(email){const r=omens(email,{q:"Is review needed?"});if(r.q>0.5) block()}'},{key:'other',source:'export default function route(email){label("human")}'}];
-      // Saved with the keys from before the rename (rituals, ritual) and omens(…): stored configs keep working as they are.
-      const config={rituals,attachments:rituals.map((r,i)=>({ritual:r.key,target:boxes[i]})),senderLists:{deny:['system@example.invalid']}};
-      ok(await local('PUT','/v1/rules',config));
-      const saved=ok(await request('POST','/mcp?codemode=true',token,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'applyRules',arguments:{confirm:true,body:{rules:rituals,attachments:rituals.map((r,i)=>({rule:r.key,target:boxes[i]})),senderLists:{deny:['fixture@example.net']},evaluateDomains:[boxes[0].split('@')[1]]}}}},rpcHeaders)).result;
+      // The approval makes the sender list and the decision opt-in first; then the person attaches guards that read them.
+      // (An approval can't change what an attached guard of another owner reads: see R1.)
+      const inputs={senderLists:{deny:['fixture@example.net']},evaluateDomains:[boxes[0].split('@')[1]]};
+      const saved=ok(await request('POST','/mcp?codemode=true',token,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'applyRules',arguments:{confirm:true,body:{rules:[],attachments:[],...inputs}}}},rpcHeaders)).result;
       assert.equal(saved.isError,false,redact(saved));
+      // Saved with the keys from before the rename (rituals, ritual) and omens(…): stored configs keep working as they are.
+      ok(await local('PUT','/v1/rules',{rituals,attachments:rituals.map((r,i)=>({ritual:r.key,target:boxes[i]})),...inputs}));
       const dry=async()=>ok(await local('POST','/v1/rules/test',{mime:`From: fixture@example.net\r\nTo: ${boxes.join(', ')}\r\nSubject: fixture\r\n\r\nfixture`,scores:{'Is review needed?':1}})).recipients;
       const active=await dry();assert.deepEqual(active.map((r:Json)=>r.dropped),[true,true,false]);
       ok(await local('POST','/v1/agents/mcp_'+consentId+'/revoke'));
@@ -13777,6 +13828,18 @@ describe('Hosted MCP OAuth and tools', () => {
       assert.deepEqual([heldRow.ticket_type, heldRow.status, heldRow.messages, heldRow.evidence.filed], ['staff', 'ticketed', 1, undefined]);
       assert.equal((await platform.filedConversation(held)).body.filed, false);
       assert.equal(ok(await send('GET', `/v1/operator/support-inbox/${held}`, session(operator))).conversation.page, null, 'Its page is the handoff that opened it.');
+
+      // An account address its sign-in didn't verify is nobody's to reply to: the handoff vouches for none, a ticket has no
+      // reply address, and staff see a chat reply as one that cannot go by email.
+      const claimed = (token: string) => JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString()).user.email;
+      assert.equal(claimed(ok(await local('POST', '/v1/contact-support', {}), 201).token), manager!.email);
+      assert.deepEqual(ok(await send('GET', `/v1/operator/support-inbox/${id}`, session(operator))).replyTarget, { address: manager!.email, verified: true });
+      await db.query('UPDATE nightmail_users SET email_verified = false WHERE id = $1', [manager!.userId]);
+      try {
+        assert.equal(claimed(ok(await local('POST', '/v1/contact-support', {}), 201).token), null);
+        assert.equal(ok(await file('Filed while unverified.'), 201).ticket.replyTo, null);
+        assert.deepEqual(ok(await send('GET', `/v1/operator/support-inbox/${id}`, session(operator))).replyTarget, { address: null, verified: false });
+      } finally { await db.query('UPDATE nightmail_users SET email_verified = true WHERE id = $1', [manager!.userId]); }
 
       // A ticket's words go in ticket.message alone; and past the hourly limit nothing is filed.
       error(await local('POST', '/v1/contact-support', { message: 'a', ticket: { message: 'b' } }), 422, 'VALIDATION_FAILED');
@@ -32956,6 +33019,30 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         [{filename:'attachment',contentType:'image/png',inline:true},{filename:'Invoice.pdf',contentType:'application/pdf',inline:false},{filename:'tool.bin',contentType:'application/x-thing',inline:false},'ATTACHMENT_TYPE_UNSCREENABLE']);
       await assert.rejects(async()=>screenedHtml('<div>'.repeat(257)),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
       await assert.rejects(async()=>screenedHtml(`<style>${'*{padding:1px}'.repeat(3000)}</style>${'<p>t</p>'.repeat(5000)}`),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
+      // A sheet of 120,000 comma selectors over 5,000 elements is refused or read in milliseconds, never compared selector
+      // by element (billions of steps): sheet rules are capped and found by their subject, in the inliner, the picture
+      // sizes of markup kept as written, and the screen's elements CSS may display.
+      {
+        const {assertKeptImages}=await import('./src/screened-html.js'),{readHtml}=await import('./src/screen.js');
+        const bombs:[string,()=>unknown,string][]=[
+          ['sizing',()=>assertKeptImages(`<style>@media all{${'*,'.repeat(120000)}*{width:9px}}</style>${'<img src="cid:a">'.repeat(5000)}`),'CONTENT_IMAGE_ONLY'],
+          ['inlined',()=>screenedHtml(`<style>${'p,'.repeat(120000)}p{color:#000}</style>${'<p>t</p>'.repeat(5000)}`),'CONTENT_TOO_LARGE_TO_SCREEN'],
+          ['displayed',()=>readHtml(`<style>${'a,'.repeat(120000)}a{display:block}</style>${'<title>t</title>'.repeat(5000)}`),'CONTENT_TOO_LARGE_TO_SCREEN'],
+        ];
+        for (const [name,bomb,code] of bombs) {
+          const times:number[]=[];
+          for (let i=0;i<3;i++) { const at=performance.now(); await assert.rejects(async()=>bomb(),{code},name); times.push(performance.now()-at); }
+          assert.ok(Math.min(...times)<50,`${name}: ${times.map(n=>n.toFixed(1)).join(', ')} ms`);
+        }
+        // A picture a rule sizes by a pseudo-class still counts at the size the rule gives it.
+        await assert.rejects(async()=>assertKeptImages('<style>img:first-child{width:2000px;height:2000px}</style><p>Receipt.</p><img width="10" height="10" src="cid:a">'),{code:'CONTENT_IMAGE_ONLY'});
+      }
+      // An image's data: URL is a raster picture or nothing: SVG draws text the screen never read.
+      {
+        const png='data:image/png;base64,'+Buffer.alloc(64,7).toString('base64'),svg='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>SampleMarker</text></svg>').toString('base64');
+        const srcs=[png,svg,'data:image/svg+xml,<svg><text>x</text></svg>','data:image/png,raw'].map(src=>/ src="([^"]*)"/.exec(screenedHtml(`<p>Your receipt is attached below.</p><img width="50" height="50" src="${src}">`))?.[1]);
+        assert.deepEqual(srcs,[png,undefined,undefined,undefined]);
+      }
       // Ordinary templates: the delivered copy keeps their text, loses sheets and comments, and screens in one request
       // with the visible passage; as submitted (the trusted path) they screen the same way.
       for (const [name,{html,expect}] of Object.entries(screenCorpus())) {
@@ -42593,6 +42680,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const styled=visibleMail(null,'<style>.muted{visibility:hidden}</style><div class="muted">Sample</div><details>Sample</details><title>Sample</title><p>Visible</p>');assert.equal(styled.text,'Visible');assert.equal(styled.hiddenContent,true);
     const tags='vis\u{e0061}ible';assert.equal(visibleMail(tags,null).hiddenContent,true);assert.equal(displayText(tags),'visible');assert.equal(visibleMail(null,`<p>${tags}</p>`).text,'visible');
     assert.deepEqual(safeMailText(tags,'<span style="display:none">ignored</span>'),{text:'visible',hiddenContent:true});
+    // Text no client draws beside the rest (a frame's, noembed's and noframes' fallback, a srcdoc) and markup only Outlook
+    // shows (a conditional comment) never reach an agent as visible text, and say there was hidden content.
+    for (const html of ['<p>Visible</p><iframe>Sample</iframe>','<p>Visible</p><noframes>Sample</noframes>','<p>Visible</p><noembed><b>Sample</b></noembed>',
+      '<p>Visible</p><iframe srcdoc="<p>Sample</p>"></iframe>','<p>Visible</p><!--[if mso]><p>Sample</p><![endif]-->'])
+      assert.deepEqual(safeMailText(null,html),{text:'Visible',hiddenContent:true},html);
+    assert.deepEqual(safeMailText(null,'<p>Visible</p><!-- a note -->'),{text:'Visible',hiddenContent:false},'An ordinary comment is not hidden content.');
     assert.deepEqual(safeMailText('Clean text',null),{text:'Clean text',hiddenContent:false});
     assert.deepEqual(safeMailText(null,null),{text:'',hiddenContent:false});
     const {snippetOf}=await import('./src/mailbox-store.js');
@@ -52445,6 +52538,8 @@ test('bounded inbound page sizes: address caps, byte-bounded pagination, routing
       const heldA: Array<{ release(): void }> = [];
       const waitingA: Promise<unknown>[] = [];
       const acA = new AbortController();
+      const threads = (key: string) => fetch(new Request(PUBLIC_ORIGIN + '/v1/inbound/threads?limit=5', { headers: { authorization: 'Bearer ' + key } }));
+      assert.equal((await threads(keyA)).status, 200);
       try {
         for (let i = 0; i < READ_MAX_ACTIVE_PER_WORKSPACE; i++) {
           heldA.push(await readPool.acquire(wsA, undefined, { route: 'test.saturate', busyCode: 'READ_CONCURRENCY_LIMIT', busyMessage: 'busy', wsBusyCode: 'READ_CONCURRENCY_LIMIT', wsBusyMessage: 'busy' }));
@@ -52457,6 +52552,9 @@ test('bounded inbound page sizes: address caps, byte-bounded pagination, routing
         const [aRes, bRes] = await Promise.all([fetch(aReq), fetch(bReq)]);
         assert.equal(aRes.status, 429, 'saturated workspace A inbox key gets 429');
         assert.equal(bRes.status, 200, 'separate workspace B inbox key stays unaffected (200)');
+        // The conversation list waits in the same pool as the other inbound reads.
+        const [aThreads, bThreads] = await Promise.all([threads(keyA), threads(keyB)]);
+        assert.deepEqual([aThreads.status, bThreads.status], [429, 200], 'listInboundThreads is bounded per workspace');
       } finally {
         acA.abort();
         for (const h of heldA) h.release();

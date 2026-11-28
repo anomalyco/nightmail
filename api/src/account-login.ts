@@ -343,13 +343,14 @@ export async function finishAccountLogin(runtime: Runtime, url: URL, binding: st
         }
       }
       // Serialize email ownership changes separately from the stable subject. A
-      // conflicting address must never transfer somebody else's user or memberships.
+      // conflicting address must never transfer somebody else's user or memberships. An address the provider doesn't
+      // vouch for (email_verified) never replaces a verified one: support and invitations read that as the person's.
       if (emailAtLogin) await db.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(lower(${emailAtLogin}),80324))`);
       const updated = await db.execute(sql`WITH observed AS (
         SELECT ${address}::text AS email, (${!!emailAtLogin} AND NOT EXISTS(SELECT FROM nightmail_users WHERE id<>${userId}
           AND email_verified AND lower(email)=lower(${address}))) AS verified
       ) UPDATE nightmail_users u SET email=o.email,email_verified=o.verified,updated_at=now() FROM observed o
-        WHERE u.id=${userId} AND (u.email,u.email_verified) IS DISTINCT FROM (o.email,o.verified) RETURNING u.id`);
+        WHERE u.id=${userId} AND (u.email,u.email_verified) IS DISTINCT FROM (o.email,o.verified) AND (${!!emailAtLogin} OR NOT u.email_verified) RETURNING u.id`);
       if(updated.rowCount) await db.execute(sql`DELETE FROM nightmail_sessions WHERE user_id=${userId}`);
       // A support email's sign-in link (support-conversations.ts) it followed proves the mailbox it went to when that is the
       // account's verified address, as an emailed link of the account service's does: spent here, so a sign-in refused

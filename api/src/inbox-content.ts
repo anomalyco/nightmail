@@ -22,10 +22,12 @@ export function visibleMail(text: string | null, html: string | null, extract = 
   const links: { text: string; href: string; mismatch: boolean }[] = [];
   function walk(n: DefaultTreeAdapterMap['childNode']): string {
     if (n.nodeName === '#text' && 'value' in n) return strip(n.value);
-    if (!('tagName' in n)) return '';
+    // An Outlook conditional comment holds markup only Outlook shows (bounded-html.ts): flagged, never read as text.
+    if (!('tagName' in n)) { if ('childNodes' in n && (n as {childNodes: unknown[]}).childNodes.length) hiddenContent = true; return ''; }
     const attr = (k: string) => n.attrs.find((a) => a.name === k)?.value;
     if (
-      ['script', 'style', 'template', 'noscript', 'head', 'title', 'svg', 'math'].includes(n.tagName) || (n.tagName==='details' && attr('open')===undefined) || (hasStylesheet && (attr('class')!==undefined || attr('id')!==undefined)) ||
+      // A frame shows another document (or its srcdoc), and no current client shows the fallback text of iframe, noembed or noframes.
+      ['script', 'style', 'template', 'noscript', 'head', 'title', 'svg', 'math', 'iframe', 'noembed', 'noframes'].includes(n.tagName) || (n.tagName==='details' && attr('open')===undefined) || (hasStylesheet && (attr('class')!==undefined || attr('id')!==undefined)) ||
       attr('hidden') !== undefined ||
       attr('aria-hidden') === 'true' ||
       hides(attr('style')??'')
@@ -47,7 +49,7 @@ export function visibleMail(text: string | null, html: string | null, extract = 
     }
     return ['div', 'p', 'br', 'li', 'tr'].includes(n.tagName) ? `\n${s}\n` : s;
   }
-  const fragment = html ? boundedHtmlFragment(html) : null;
+  const fragment = html ? boundedHtmlFragment(html, 'fragment', { clients: true }) : null;
   // No CSS engine: when a stylesheet exists, conservatively omit class/id-styled subtrees
   // rather than trusting text whose visibility depends on the cascade. Never fetch CSS.
   const hasStylesheet=!!html && /<(?:style|link)\b/i.test(html);if(hasStylesheet)hiddenContent=true;

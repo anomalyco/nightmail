@@ -382,6 +382,7 @@ function rules(sheet: string, out: Rule[]) {
     const parsed = declarations(body);
     if (!parsed.length) continue;
     for (const text of prelude.split(',')) {
+      if (out.length >= MAX_RULES) break;
       const selector = parseSelector(text.replace(/\s+/g, ' ').trim());
       if (selector) out.push({ selector, declarations: parsed, order: out.length });
     }
@@ -490,36 +491,33 @@ function inliner(sheets: string[], tree: Map<Element, Facts>) {
     const list = index.get(key); if (list) list.push(entry); else index.set(key, [entry]);
   }
   let steps = 0;
-  const matches = (facts: Facts, selector: Selector): boolean => {
-    const { compounds, combinators } = selector;
-    const walk = (at: number, subject: Facts | null): boolean => {
-      if (!subject) return false;
-      if (++steps > MAX_STEPS) throw tooLarge();
-      if (!matchesCompound(subject, compounds[at]!)) return false;
-      if (at === 0) return true;
-      const combinator = combinators[at - 1];
-      if (combinator === '>') return walk(at - 1, subject.parent);
-      if (combinator === '+') return walk(at - 1, subject.previous);
-      if (combinator === '~') { for (let p = subject.previous; p; p = p.previous) if (walk(at - 1, p)) return true; return false; }
-      for (let p = subject.parent; p; p = p.parent) if (walk(at - 1, p)) return true;
-      return false;
-    };
-    return walk(compounds.length - 1, facts);
+  const walk = (selector: Selector, at: number, subject: Facts | null): boolean => {
+    if (!subject) return false;
+    if (++steps > MAX_STEPS) throw tooLarge();
+    if (!matchesCompound(subject, selector.compounds[at]!)) return false;
+    if (at === 0) return true;
+    const combinator = selector.combinators[at - 1];
+    if (combinator === '>') return walk(selector, at - 1, subject.parent);
+    if (combinator === '+') return walk(selector, at - 1, subject.previous);
+    if (combinator === '~') { for (let p = subject.previous; p; p = p.previous) if (walk(selector, at - 1, p)) return true; return false; }
+    for (let p = subject.parent; p; p = p.parent) if (walk(selector, at - 1, p)) return true;
+    return false;
   };
+  // A declaration's place in the cascade: importance, then specificity (an inline style's above any rule's), then order.
+  const rank = (d: Declaration, specificity: number, order: number) => (d.important ? 1e12 : 0) + specificity * 1e5 + order;
   return (element: Element): Declaration[] => {
     const facts = tree.get(element), inline = declarations(stripComments(element.attrs.find(a => a.name === 'style')?.value ?? ''));
     if (!facts || !parsed.length) return inline;
-    const candidates = [...(index.get('*') ?? []), ...(index.get(facts.tag) ?? [])];
-    const id = facts.attrs.get('id')?.toLowerCase(); if (id) candidates.push(...index.get(`#${id}`) ?? []);
-    for (const name of facts.classes) candidates.push(...index.get(`.${name}`) ?? []);
-    type Candidate = Declaration & { specificity: number; order: number };
-    const all: Candidate[] = [];
-    for (const { rule, needs } of candidates) if (needs.every(need => facts.chain.has(need)) && matches(facts, rule.selector)) for (const d of rule.declarations) all.push({ ...d, specificity: rule.selector.specificity, order: rule.order });
-    inline.forEach((d, i) => all.push({ ...d, specificity: 1e6, order: 1e9 + i }));
-    const rank = (c: Candidate) => (c.important ? 1e12 : 0) + c.specificity * 1e5 + c.order;
-    const winners = new Map<string, Candidate>();
-    for (const c of all) { const current = winners.get(c.property); if (!current || rank(c) >= rank(current)) winners.set(c.property, c); }
-    return [...winners.values()].sort((a, b) => rank(a) - rank(b)).map(({ property, value, important }) => ({ property, value, important }));
+    const winners = new Map<string, { d: Declaration; rank: number }>();
+    const offer = (d: Declaration, at: number) => { const current = winners.get(d.property); if (!current) winners.set(d.property, { d, rank: at }); else if (at >= current.rank) { current.d = d; current.rank = at; } };
+    for (const key of subjectKeys(facts.tag, facts.attrs.get('id')?.toLowerCase(), facts.classes))
+      for (const { rule, needs } of index.get(key) ?? []) {
+        if (++steps > MAX_STEPS) throw tooLarge();
+        if (needs.every(need => facts.chain.has(need)) && walk(rule.selector, rule.selector.compounds.length - 1, facts))
+          for (const d of rule.declarations) offer(d, rank(d, rule.selector.specificity, rule.order));
+      }
+    inline.forEach((d, i) => offer(d, rank(d, 1e6, 1e9 + i)));
+    return [...winners.values()].sort((a, b) => a.rank - b.rank).map(w => w.d);
   };
 }
 /** Element facts for selector matching, over the tree as submitted. */
@@ -544,6 +542,43 @@ function survey(root: Element): Map<Element, Facts> {
   return tree;
 }
 
+/** The index keys an element's rules may be filed under: any element's, its type's, its id's and each class's. */
+const subjectKeys = (tag: string, id: string | undefined, classes: Set<string>) => ['*', tag, ...id ? [`#${id}`] : [], ...[...classes].map(c => `.${c}`)];
+/** What a selector's subject (its last compound, without arguments or attribute tests) needs of an element: a type,
+ *  classes and ids. One with an escape or a namespace could name anything, so it needs nothing. */
+type Subject = { tag?: string; classes: string[]; ids: string[] };
+function subjectOf(selector: string): Subject {
+  const subject = selector.replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim().split(/[\s>+~]+/).at(-1)!.toLowerCase();
+  if (/[\\|]/.test(subject)) return { classes: [], ids: [] };
+  return { tag: /^[a-z][\w-]*/.exec(subject)?.[0], classes: [...subject.matchAll(/\.([-\w]+)/g)].map(m => m[1]!), ids: [...subject.matchAll(/#([-\w]+)/g)].map(m => m[1]!) };
+}
+/**
+ * Selectors by the subject they could select, for a reader that asks of each element which rules may apply to it
+ * without running a selector engine: filed under the subject's first class, id or type, so an element meets only the
+ * ones it could match. At most MAX_RULES selectors (add answers false past them), and `step` is called per comparison,
+ * for the caller's work budget.
+ */
+export function selectorSubjects<T>() {
+  const index = new Map<string, { subject: Subject; value: T }[]>();
+  let size = 0;
+  return {
+    add(selector: string, value: T) {
+      if (++size > MAX_RULES) return false;
+      const subject = subjectOf(selector), key = subject.classes.length ? `.${subject.classes[0]}` : subject.ids.length ? `#${subject.ids[0]}` : subject.tag ?? '*';
+      const list = index.get(key); if (list) list.push({ subject, value }); else index.set(key, [{ subject, value }]);
+      return true;
+    },
+    /** The values of the selectors whose subject the element meets. */
+    *matching(element: { tag: string; classes: Set<string>; id?: string }, step: () => void) {
+      for (const key of subjectKeys(element.tag, element.id, element.classes))
+        for (const { subject, value } of index.get(key) ?? []) {
+          step();
+          if ((!subject.tag || subject.tag === element.tag) && subject.classes.every(c => element.classes.has(c)) && subject.ids.every(i => i === element.id)) yield value;
+        }
+    },
+  };
+}
+
 // ----- Elements and attributes -------------------------------------------------------------------------------------
 
 /** Elements that stay, with the attributes they keep besides style, dir and lang. Any other element is unwrapped, its
@@ -561,7 +596,7 @@ const DROPPED = new Set(['script', 'style', 'template', 'noscript', 'noembed', '
   'form', 'input', 'button', 'select', 'option', 'optgroup', 'textarea', 'datalist', 'output', 'progress', 'meter', 'dialog', 'slot']);
 const digits = (v: string) => /^\d{1,4}$/.test(v) ? v : undefined;
 const ATTRIBUTES: Record<string, (value: string) => string | undefined> = {
-  href: v => /^(?:https?:|mailto:|tel:)/i.test(v.trim()) ? v.trim() : undefined, src: v => /^(?:https?:|cid:|data:image\/)/i.test(v.trim()) ? v.trim() : undefined, alt: v => screenedText(v),
+  href: v => /^(?:https?:|mailto:|tel:)/i.test(v.trim()) ? v.trim() : undefined, src: v => /^(?:https?:|cid:|data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/=\s]+$)/i.test(v.trim()) ? v.trim() : undefined, alt: v => screenedText(v),
   lang: v => /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(v) ? v : undefined, role: keywords('presentation', 'none'),
   align: keywords('left', 'center', 'right', 'justify', 'top', 'middle', 'bottom'), valign: keywords('top', 'middle', 'bottom', 'baseline'),
   width: v => /^\d{1,4}%?$/.test(v) ? v : undefined, height: v => /^\d{1,4}%?$/.test(v) ? v : undefined, border: digits, cellpadding: digits, cellspacing: digits, colspan: digits, rowspan: digits, span: digits,
@@ -584,23 +619,32 @@ function drawnArea(attribute: (name: string) => string | undefined, style: (name
 // Properties that can change the size a client draws a picture at.
 const SIZING = new Set(['width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'zoom', 'inline-size', 'block-size', 'min-inline-size', 'min-block-size',
   'max-inline-size', 'max-block-size', 'aspect-ratio', 'transform', 'scale', 'all']);
-type SizingRule = { tag?: string; classes: string[]; ids: string[]; any: boolean; decls: Declaration[] };
+const WIDTHS = new Set(['width', 'min-width', 'inline-size', 'min-inline-size']), HEIGHTS = new Set(['height', 'min-height', 'block-size', 'min-block-size']);
+type Sizes = { width: number; height: number; zoom: number };
+/** `into` enlarged to the widest width, tallest height and largest zoom the declarations set. */
+function enlarge(into: Sizes, decls: Declaration[]) {
+  for (const d of decls) {
+    const v = d.value.toLowerCase();
+    if (d.property === 'zoom') { const n = /%$/.test(v) ? parseFloat(v) / 100 : parseFloat(v); if (Number.isFinite(n)) into.zoom = Math.max(into.zoom, n); continue; }
+    const n = lengthOf(v);
+    if (n === undefined || !(n > 0)) continue;
+    if (WIDTHS.has(d.property)) into.width = Math.max(into.width, n); else if (HEIGHTS.has(d.property)) into.height = Math.max(into.height, n);
+  }
+  return into;
+}
 /** Every style sheet rule that sets a size property, rules inside at-rules (media queries) included, by the subject it
- *  could select: its last compound's type, classes and id (an escaped one could be anything). Null past the sheet budget. */
-function sizingRules(sheets: string[]): SizingRule[] | null {
+ *  could select (selectorSubjects), with the sizes it sets. Null past the sheet or rule budget: any picture may be resized. */
+function sizingRules(sheets: string[]) {
   const css = stripComments(sheets.join('\n'));
   if (css.length > MAX_SHEET_BYTES) return null;
-  const out: SizingRule[] = [];
+  const index = selectorSubjects<Sizes>();
   for (const m of css.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
     const prelude = m[1]!.trim(), decls = declarations(unescapeCss(m[2]!)).filter(d => SIZING.has(d.property));
     if (!decls.length || prelude.startsWith('@')) continue;
-    for (const selector of prelude.split(',')) {
-      const subject = selector.replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim().split(/[\s>+~]+/).at(-1)!.toLowerCase();
-      out.push(subject.includes('\\') ? { classes: [], ids: [], any: true, decls }
-        : { tag: /^[a-z][\w:-]*/.exec(subject)?.[0], classes: [...subject.matchAll(/\.([-\w]+)/g)].map(c => c[1]!), ids: [...subject.matchAll(/#([-\w]+)/g)].map(c => c[1]!), any: false, decls });
-    }
+    const sizes = enlarge({ width: 0, height: 0, zoom: 1 }, decls);
+    for (const selector of prelude.split(',')) if (!index.add(selector, sizes)) return null;
   }
-  return out;
+  return index;
 }
 /** The elements that draw a picture: images, inline SVG, image inputs and Office VML with a source. */
 const isPicture = (element: Element) => { const tag = element.tagName; return tag === 'img' || tag === 'image' || tag === 'svg' || (tag === 'input' && element.attrs.find(a => a.name === 'type')?.value.toLowerCase() === 'image') || (/:(?:imagedata|image|fill)$/.test(tag) && element.attrs.some(a => a.name === 'src')); };
@@ -671,17 +715,24 @@ function pass(html: string, previewText?: string, stats?: HtmlStats, kept = fals
   // Kept markup: a picture whose size delivered CSS could change (its own style, or a sheet rule, media queries included,
   // that could select it) counts at full size: at least a full-width 600 x 400, more if the CSS or attributes declare
   // more, times any zoom. Only a picture with no such CSS keeps the size it declares (drawnArea).
-  const sizing = kept ? sizingRules(sheets) : [];
+  const sizing = kept ? sizingRules(sheets) : null;
+  let sizingSteps = 0;
+  const step = () => { if (++sizingSteps > MAX_STEPS) throw tooLarge(); };
   const fullSize = (element: Element): number | undefined => {
     if (!kept) return undefined;
     const own = declarations(stripComments(unescapeCss(attribute(element, 'style') ?? ''))).filter(d => SIZING.has(d.property));
-    const classes = new Set((attribute(element, 'class') ?? '').toLowerCase().split(/\s+/)), id = attribute(element, 'id')?.toLowerCase();
-    const rules = sizing?.filter(r => r.any || ((!r.tag || r.tag === element.tagName) && r.classes.every(c => classes.has(c)) && r.ids.every(i => i === id)));
-    if (rules && !rules.length && !own.length) return undefined;
-    const decls = [...own, ...(rules ?? []).flatMap(r => r.decls)], value = (d: Declaration) => d.value.replace(/!\s*important\s*$/i, '').trim().toLowerCase();
-    const longest = (names: string[], attr: string, least: number) => Math.max(least, ...[lengthOf(attribute(element, attr)), ...decls.filter(d => names.includes(d.property)).map(d => lengthOf(value(d)))].filter((n): n is number => n !== undefined && n > 0));
-    const zoom = Math.max(1, ...decls.filter(d => d.property === 'zoom').map(d => { const v = value(d); return /%$/.test(v) ? parseFloat(v) / 100 : parseFloat(v); }).filter(n => Number.isFinite(n)));
-    return longest(['width', 'min-width', 'inline-size', 'min-inline-size'], 'width', 600) * longest(['height', 'min-height', 'block-size', 'min-block-size'], 'height', 400) * zoom * zoom;
+    const size = enlarge({ width: 600, height: 400, zoom: 1 }, own);
+    let matched = own.length > 0 || !sizing;
+    if (sizing) {
+      const classes = new Set((attribute(element, 'class') ?? '').toLowerCase().split(/\s+/)), id = attribute(element, 'id')?.toLowerCase();
+      for (const rule of sizing.matching({ tag: element.tagName, classes, id }, step)) {
+        matched = true;
+        size.width = Math.max(size.width, rule.width); size.height = Math.max(size.height, rule.height); size.zoom = Math.max(size.zoom, rule.zoom);
+      }
+    }
+    if (!matched) return undefined;
+    const declared = (name: string) => lengthOf(attribute(element, name)) || 0;
+    return Math.max(size.width, declared('width')) * Math.max(size.height, declared('height')) * size.zoom * size.zoom;
   };
   const background = (element: Element) => {
     if (!kept) return 0;

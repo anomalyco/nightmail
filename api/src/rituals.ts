@@ -202,7 +202,7 @@ export async function save(tx: DbExecutor, c: Ctx, w: string, input: Config, ver
     ...Object.entries(cfg.senderLists).map(([k,v])=>['list:'+k,JSON.stringify(v)] as const),
     ...cfg.evaluateDomains.map(k=>['domain:'+k,k] as const),...cfg.evaluateRoutes.map(k=>['route:'+k,k] as const),
   ]);
-  const before=prior&&parts(prior.config), grant=c.get('actor').grantId??null;
+  const before=prior&&parts(prior.config), after=parts(config), grant=c.get('actor').grantId??null;
   if (prior && grant && !preview) {
     // Ignore additions and this approval's own bindings. What remains must be the
     // same chain, including continue flags: the first action can stop later guards.
@@ -215,8 +215,21 @@ export async function save(tx: DbExecutor, c: Ctx, w: string, input: Config, ver
     const off=(cfg:Config)=>new Set(cfg.rituals.filter(r=>r.enabled===false).map(r=>r.key)),was=off(prior.config),now=off(config);
     if (protectedBindings.some(b=>now.has(b.ritual)&&!was.has(b.ritual)))
       throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot turn off another owner’s rule.','enabled');
+    // What those attachments run stays as it was: the rule's source, the sender lists it reads and, for a rule that asks
+    // for decisions, every opt-in it could read under. Changed by the approval, it would run the approval's code as the
+    // other owner's rule, and become the approval's, so revoking the approval would stop the other owner's rule.
+    const changed=(key:string)=>before?.get(key)!==after.get(key);
+    const rulesRun=[...new Set(protectedBindings.map(b=>b.ritual))];
+    if (rulesRun.some(k=>changed('ritual:'+k)))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot change the source of another owner’s attached rule.','rules');
+    const read=rulesRun.flatMap(k=>(p.rituals[k]?.lists??[]).map(l=>'list:'+l.name));
+    if (read.some(changed))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot change a sender list another owner’s attached rule reads.','senderLists');
+    const optIns=[...new Set([...before?.keys()??[],...after.keys()])].filter(k=>(k.startsWith('domain:')||k.startsWith('route:'))&&changed(k));
+    if (optIns.length && rulesRun.some(k=>Object.keys(p.rituals[k]?.omens??{}).length))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot change the decision opt-ins another owner’s attached rule reads.',optIns[0]!.startsWith('domain:')?'evaluateDomains':'evaluateRoutes');
   }
-  p.owners=Object.fromEntries([...parts(config)].map(([k,v])=>[k,before?.get(k)===v?prior?.owners[k]??null:preview?null:grant]));
+  p.owners=Object.fromEntries([...after].map(([k,v])=>[k,before?.get(k)===v?prior?.owners[k]??null:preview?null:grant]));
   if (!routed) await tx.execute(
     sql`INSERT INTO mail_routing_state(workspace_id,version) VALUES(${w},${next}) ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`,
   );

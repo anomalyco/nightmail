@@ -164,7 +164,7 @@ async function invite(c: Ctx, input: z.infer<typeof Invite>) {
     if (input.role === 'owner' && role !== 'owner') throw ownerRequired();
     const result = await db.execute<InviteRow>(sql`WITH invited AS (INSERT INTO workspace_invitations(id, workspace_id, email, role, inviter_id, expires_at)
       SELECT ${id('inv')}, ${wid}, ${input.email}, ${input.role}, ${uid}, now() + interval '7 days'
-      WHERE NOT EXISTS(SELECT 1 FROM workspace_members m JOIN nightmail_users u ON u.id = m.user_id WHERE m.workspace_id = ${wid} AND lower(u.email) = ${input.email})
+      WHERE NOT EXISTS(SELECT 1 FROM workspace_members m JOIN nightmail_users u ON u.id = m.user_id WHERE m.workspace_id = ${wid} AND u.email_verified AND lower(u.email) = ${input.email})
       ON CONFLICT (workspace_id, email) WHERE status = 'pending' DO UPDATE SET id = excluded.id, role = excluded.role, inviter_id = excluded.inviter_id, expires_at = excluded.expires_at, created_at = now()
       WHERE workspace_invitations.expires_at <= now()
       RETURNING id, workspace_id AS "workspaceId", email, role, expires_at AS "expiresAt"

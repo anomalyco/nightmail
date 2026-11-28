@@ -2,7 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { ApiError, denied, errors, hasSessionCookie, id, json, notFound, response, timed, webhookUrlHint, withoutVerdict, type App, type AppEnv, type Ctx, type DbExecutor, type SupportScope } from './core.js';
-import { AuditEntry, AuditFilters, auditContext, auditInsert, customerTrail, operatorRequired, requireOperator, userEmail } from './audit.js';
+import { AuditEntry, AuditFilters, auditContext, auditInsert, customerTrail, operatorRequired, requireOperator } from './audit.js';
 import { supportRead, withRedactedReply } from './deliverability.js';
 import { GOOD_STANDING, limitRequest, type Step } from './standing-model.js';
 import { cached, registerSupportDeliverability } from './support-deliverability.js';
@@ -350,14 +350,14 @@ export function registerSupport(app: App) {
     // A ticket is filed in the same transaction as its handoff (src/support-conversations.ts fileChatTicket), under the
     // person's admission lock, so the hourly count holds for concurrent filings too.
     const contact = async (db: DbExecutor) => {
-      const { rows: [row] } = await db.execute<{ id: string; expires_at: string; name: string; email: string }>(sql`WITH h AS (
+      const { rows: [row] } = await db.execute<{ id: string; expires_at: string; name: string; email: string | null }>(sql`WITH h AS (
           INSERT INTO support_handoffs(id, user_id, workspace_id, kind, page, request_ids, message, share_content, expires_at)
           SELECT ${handoffId}, ${userId}, ${a.workspaceId}, ${body.kind}, ${body.page ?? null}, ${sql.param(body.requestIds)}::text[], ${body.message ?? null}, ${body.shareContent}, now() + ${`${HANDOFF_MINUTES} minutes`}::interval
           WHERE (SELECT count(*) FROM support_handoffs WHERE user_id = ${userId} AND created_at > now() - interval '1 hour') < ${HANDOFFS_PER_HOUR}
           RETURNING id, expires_at
         ), logged AS (${auditInsert(auditContext(c), { action: 'support.contact', workspaceId: a.workspaceId, target: { type: 'support_handoff', id: handoffId },
           after: { kind: body.kind, page: body.page, requestIds: body.requestIds, contentShared: body.shareContent, ...body.ticket ? { ticket: true } : {} } }, { where: sql`EXISTS (SELECT FROM h)` })})
-        SELECT h.id, h.expires_at::text, w.name, ${userEmail(sql`${userId}`)} AS email FROM h, workspaces w WHERE w.id = ${a.workspaceId}`);
+        SELECT h.id, h.expires_at::text, w.name, (SELECT email FROM nightmail_users WHERE id = ${userId} AND email_verified) AS email FROM h, workspaces w WHERE w.id = ${a.workspaceId}`);
       const ticket = row && body.ticket ? await fileChatTicket(db, { userId, workspaceId: a.workspaceId, handoffId, text: body.ticket.message }) : null;
       return { row, ticket };
     };

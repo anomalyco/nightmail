@@ -3,7 +3,7 @@ import type { EmailSnapshot } from './db/sending.js';
 import { errorTypeOf, log } from './log.js';
 import { keepScreenCall, outbound } from './screen-calls.js';
 import { keepShadow, type ShadowItem } from './screen-shadow.js';
-import { unescapeCss, VISIBLE_WORDS } from './screened-html.js';
+import { selectorSubjects, unescapeCss, VISIBLE_WORDS } from './screened-html.js';
 import { formattedSender } from './sending.js';
 import { SEND_LIMITS } from './send-limits.js';
 
@@ -262,14 +262,11 @@ function cssReader(sheets: string[], styles: string[], hosts: Set<string>) {
   // Every declaration once without attributes (an element without them draws attr()'s fallback), then per element below.
   const texts = new Set(drawn.flatMap(d => evaluate(d.list, null, d.idents)).map(t => t.trim()).filter(Boolean));
   // Rules that may display an element: a display other than none, or all (which resets it), on a selector whose subject
-  // (its last compound, without pseudo-elements) has no type or that type, and only classes and an id the element has.
-  // A subject with an escape could name anything, so it may display any of them.
-  const subjects = rules.filter(rule => rule.prelude && !rule.prelude.startsWith('@') && displays(rule.decls)).flatMap(rule => rule.prelude.split(',').flatMap(selector => {
-    if (/::|:(?:before|after|first-line|first-letter)\b/i.test(selector)) return [];
-    const subject = selector.replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim().split(/[\s>+~]+/).at(-1)!.toLowerCase();
-    if (subject.includes('\\')) return [{ tag: undefined, classes: [], ids: [] }];
-    return [{ tag: /^[a-z][\w-]*/.exec(subject)?.[0], classes: [...subject.matchAll(/\.([-\w]+)/g)].map(m => m[1]!), ids: [...subject.matchAll(/#([-\w]+)/g)].map(m => m[1]!) }];
-  }));
+  // (its last compound, without pseudo-elements) the element could meet (selectorSubjects). Past its budget the sheet
+  // is unreadable.
+  const subjects = selectorSubjects<true>(), step = () => { if (++steps > CSS_STEPS) throw unreadable(); };
+  for (const rule of rules) if (rule.prelude && !rule.prelude.startsWith('@') && displays(rule.decls))
+    for (const selector of rule.prelude.split(',')) if (!/::|:(?:before|after|first-line|first-letter)\b/i.test(selector) && !subjects.add(selector, true)) throw unreadable();
   return {
     texts,
     /** What attr() draws for this element: every declaration that reads one of its attributes, with them resolved. */
@@ -281,7 +278,7 @@ function cssReader(sheets: string[], styles: string[], hosts: Set<string>) {
     /** Whether CSS may display an element a client hides by default. */
     shown: (tag: string, attrs: { name: string; value: string }[]) => {
       const style = attrs.find(a => a.name === 'style')?.value, classes = new Set((attrs.find(a => a.name === 'class')?.value ?? '').toLowerCase().split(/\s+/)), id = attrs.find(a => a.name === 'id')?.value.toLowerCase();
-      return (style !== undefined && displays(cssRules(style)[0]!.decls)) || subjects.some(s => (!s.tag || s.tag === tag) && s.classes.every(c => classes.has(c)) && s.ids.every(i => i === id));
+      return (style !== undefined && displays(cssRules(style)[0]!.decls)) || !subjects.matching({ tag, classes, id }, step).next().done;
     },
   };
 }

@@ -664,8 +664,9 @@ export function registerSupportInbox(app: App) {
           UNION ALL SELECT 'sev_' || e.id, e.id, e.kind, e.user_id, u.name, e.details::json, e.created_at FROM support_events e LEFT JOIN nightmail_users u ON u.id = e.user_id WHERE e.conversation_id = conv.id
           UNION ALL SELECT 'closed', 9223372036854775807, 'closed', NULL, NULL, '{}'::json, conv.closed_at WHERE conv.closed_at IS NOT NULL) e) AS events,
         conv.ticket_brief AS brief,
-        CASE WHEN conv.channel = 'email' THEN conv.pending_address ELSE (SELECT email FROM nightmail_users WHERE id = conv.user_id) END AS reply_address,
-        conv.channel = 'chat' OR conv.verification <> 'none' OR coalesce(conv.evidence->>'dmarc' = 'PASS', false) AS reply_verified,
+        CASE WHEN conv.channel = 'email' THEN conv.pending_address ELSE (SELECT email FROM nightmail_users WHERE id = conv.user_id AND email_verified) END AS reply_address,
+        CASE WHEN conv.channel = 'chat' THEN EXISTS (SELECT FROM nightmail_users WHERE id = conv.user_id AND email_verified)
+          ELSE conv.verification <> 'none' OR coalesce(conv.evidence->>'dmarc' = 'PASS', false) END AS reply_verified,
         (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'emailVerified', u.email_verified, 'createdAt', u.created_at) FROM nightmail_users u WHERE u.id = conv.user_id) AS user,
         (SELECT coalesce(json_agg(x ORDER BY x.name, x.id), '[]') FROM (SELECT w.id, w.name, m.role, m.created_at AS "joinedAt", w.created_at AS "createdAt",
             (SELECT count(*)::int FROM workspace_members o WHERE o.workspace_id = w.id) AS members, w.id = conv.workspace_id AS "inScope", w.id IS NOT DISTINCT FROM conv.content_workspace_id AS "contentShared",
