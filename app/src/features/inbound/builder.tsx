@@ -242,8 +242,19 @@ type Step = 'address' | 'flow' | 'done'
  * The builder. New: the address, then where its mail goes, then the result with Test. Editing (address given): where
  * its mail goes, then the result; split preselects a two-way rule of that kind when the address has none (New rule's
  * Split by words or meaning). Wildcards and catch-alls keep "Where should this mail go?" (routing.tsx).
+ * Each opening starts afresh: a new builder mounts as it opens and stays through its closing. Only each write's
+ * idempotency outlives an opening, so a retry after reopening never makes a second endpoint.
  */
-export function AddressBuilder({ open, onOpenChange, domains, initial = '', address, split, rule: ruleKey, onSaved, onPattern }: { open: boolean; onOpenChange: (open: boolean) => void; domains: Pick<MailboxDomain, 'id' | 'name' | 'status'>[] | Overview['domains']; initial?: string; address?: InboundAddress; split?: Condition; rule?: string; onSaved?: (address: InboundAddress) => void; onPattern?: (match: string) => void }) {
+type BuilderProps = { open: boolean; onOpenChange: (open: boolean) => void; domains: Pick<MailboxDomain, 'id' | 'name' | 'status'>[] | Overview['domains']; initial?: string; address?: InboundAddress; split?: Condition; rule?: string; onSaved?: (address: InboundAddress) => void; onPattern?: (match: string) => void }
+type Attempts = Map<string, { key: string; body: string }>
+export function AddressBuilder(props: BuilderProps) {
+  const [openings, setOpenings] = useState(props.open ? 1 : 0)
+  const [wasOpen, setWasOpen] = useState(props.open)
+  if (props.open !== wasOpen) { setWasOpen(props.open); if (props.open) setOpenings(n => n + 1) }
+  const attempts = useRef<Attempts>(new Map())
+  return openings ? <AddressBuilderDialog key={openings} {...props} attempts={attempts.current} /> : null
+}
+function AddressBuilderDialog({ open, onOpenChange, domains, initial = '', address, split, rule: ruleKey, onSaved, onPattern, attempts }: BuilderProps & { attempts: Attempts }) {
   const client = useQueryClient()
   const receiving = receivingDomains(domains)
   const { multiTenant } = useWorkspaceAccess()
@@ -290,9 +301,8 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
   const [leaving, setLeaving] = useState<{ go: () => void; made?: { title: string; description: ReactNode } } | null>(null)
   const outcome = useRef<HTMLDivElement>(null)
   // Each write's idempotency (a retry of the same body reuses its key), and the destinations a save made, reused by a retry.
-  const attempts = useRef(new Map<string, { key: string; body: string }>())
   const made = useRef(new Map<string, { id: string; name: string; key?: string | null; status?: string }>())
-  const attempt = (name: string) => { let a = attempts.current.get(name); if (!a) attempts.current.set(name, a = { key: '', body: '' }); return a }
+  const attempt = (name: string) => { let a = attempts.get(name); if (!a) attempts.set(name, a = { key: '', body: '' }); return a }
   const api = useApi()
   const [boxSearch, setBoxSearch] = useState('')
   const [checkingAddress, setCheckingAddress] = useState(false)
@@ -310,8 +320,6 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
   // The flow as it was when the builder opened it: what a save compares with, and the version it sends.
   const [opened, setOpened] = useState<{ entry: RouteEntry; overview: Overview } | null>(null)
   const [plan, setPlan] = useState<Plan | null>(null)
-  // Opening starts afresh. Before the effects below, so the flow they capture from cached data isn't cleared after.
-  useEffect(() => { if (open) { setEditing(!!address); setStep(address ? 'flow' : 'address'); setSaved(address ?? null); setForm({ address: initial, displayName: '', lifetime: '', publicAddress: '' }); setErrors({}); setCodes({}); setRefused([]); setReceivingSetup(null); setMoveHost(null); setProblem(null); setPlan(null); setWaiting(null); setNote(null); setForwardTo(null); setConflict(false); setOpened(null); setReplace(false); setBoxSearch(''); setForwardFrom(null); made.current.clear() } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (open && editing && !opened && entry && overview.data && !boxes.isPending && !resolvedBoxes.pending) setOpened({ entry, overview: overview.data }) }, [open, editing, opened, entry, overview.data, boxes.isPending, resolvedBoxes.pending])
   // A rule given by key changes that rule only (its fork and its sides), on an address with any number of rules:
   // the address's route and its other rules stay.
