@@ -7030,11 +7030,15 @@ describe('Hosted MCP OAuth and tools', () => {
     const member = await sessionFixture(t);
     await db.query("UPDATE workspace_members SET role = 'member' WHERE user_id = $1 AND workspace_id = 'default'", [member.userId]);
     const otherAgent = `mcp_at_${randomUUID().replaceAll('-', '')}`, otherToken = `agt_${randomUUID().replaceAll('-', '')}`;
-    await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,permissions,expires_at,issued_at) VALUES($1,$2,$3,$3,'fixture-member-client','{read,send}',now()+interval '1 hour',0)", [otherAgent, process.env.ACCOUNT_ISSUER, member.userId]);
+    await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,permissions,expires_at,issued_at) VALUES($1,$2,$3,$3,'fixture-member-client','{read,send}',now()+interval '1 hour',floor(extract(epoch FROM now()))::bigint)", [otherAgent, process.env.ACCOUNT_ISSUER, member.userId]);
     await db.query(`INSERT INTO agent_tokens(id,workspace_id,grant_id,permissions,domains,purpose,expires_at) VALUES($1,'default',$2,'["read"]','[]','Member script',now()+interval '1 hour')`, [otherToken, otherAgent]);
     cleanup(t, async () => { await db.query('DELETE FROM agent_tokens WHERE id = $1', [otherToken]); });
     const theirs = (await agents()).find(a => a.id === otherAgent);
     assert.deepEqual([theirs?.own, theirs?.userEmail, theirs?.workspaceId, theirs?.tokens.map((x: Json) => x.id)], [false, member.email, null, [otherToken]]);
+    // Past its end (nightmail_approval_active), another member's approval is listed only with the inactive ones, as expired.
+    await db.query('UPDATE nightmail_resource_grants SET issued_at = 0 WHERE id = $1', [otherAgent]);
+    assert.deepEqual([(await agents()).some(a => a.id === otherAgent), (await agents('?includeInactive=true')).find(a => a.id === otherAgent)?.status], [false, 'expired']);
+    await db.query('UPDATE nightmail_resource_grants SET issued_at = floor(extract(epoch FROM now()))::bigint WHERE id = $1', [otherAgent]);
     // An owner revokes another member's agent tokens here; the sign-in stays theirs, and so do its tokens in another workspace.
     const elsewhere = unique('agents-ws'), farToken = `agt_${randomUUID().replaceAll('-', '')}`;
     await db.query('INSERT INTO workspaces (id, name, slug) VALUES ($1, $1, $1)', [elsewhere]);
@@ -48048,6 +48052,19 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(memoryInUse() >= png.length, `${memoryInUse()} bytes counted while unread.`);
       await unread.body!.cancel();
       assert.equal(memoryInUse(), 0);
+      // On Cloudflare the colo's copy is written first and the reader is answered from it, so nothing stays counted (or
+      // held in the isolate) however slowly the reader reads; the copy is kept an hour, the answer a year.
+      const colo = new Map<string, { body: ArrayBuffer; headers: Headers }>(), global = globalThis as { caches?: unknown };
+      global.caches = { default: {
+        async put(key: Request, value: Response) { colo.set(key.url, { body: await value.arrayBuffer(), headers: value.headers }); },
+        async match(key: Request) { const kept = colo.get(key.url); return kept && new Response(kept.body, { headers: kept.headers }); },
+      } };
+      try {
+        const fromColo = await get(path);
+        assert.equal(memoryInUse(), 0, 'A picture answered from the colo holds no memory here.');
+        assert.deepEqual([fromColo.headers.get('cache-control'), colo.get(PUBLIC_ORIGIN + path)?.headers.get('cache-control')], ['public, max-age=31536000, immutable', 'public, max-age=3600']);
+        assert.ok(Buffer.from(await fromColo.arrayBuffer()).equals(png));
+      } finally { delete global.caches; }
       assert.equal((await get(path, { 'if-none-match': `"${checksum}"` })).status, 304);
       const head = await get(path, {}, 'HEAD');
       assert.equal(head.status, 200); assert.equal((await head.arrayBuffer()).byteLength, 0);

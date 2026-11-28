@@ -447,40 +447,35 @@ export async function withBoundedRead<T>(
   }
 }
 
+type LeasedStreamOptions = { idleMs?: number; maxMs?: number; timeoutError?: () => Error };
+
 /**
- * Streams a binary payload as canonical base64 inside a JSON envelope (`metaJsonWithEmptyContent` ending in `""}`)
- * while holding a self-reclaiming MemoryLease. Releases on stream close, cancel, abort signal, idle progress timeout,
- * or hard absolute deadline (via both the fast-path timer and budget-level reclaim).
+ * A response body that holds `lease` until it is read, canceled or aborted, or goes past its idle or hard deadline: a
+ * deadline errors the stream, from its own timers or from the budget's reclaim (for a request workerd cancelled), and
+ * drops `chunks` (and the bytes they come from). Null when the request is already aborted. A lease the budget already
+ * reclaimed (its holder waited past the default deadline) fails as busy rather than serving uncounted bytes.
  */
-export function streamBase64JsonResponse(
-  c: Ctx,
-  lease: MemoryLease,
-  metaJsonWithEmptyContent: string,
-  bytes: Uint8Array,
-  opts: { idleMs?: number; maxMs?: number; timeoutError?: () => Error } = {},
-): Response {
+function leasedBody(c: Ctx, lease: MemoryLease, chunks: Iterator<Uint8Array>, opts: LeasedStreamOptions): ReadableStream<Uint8Array> | null {
+  if (lease.released) {
+    c.header('Retry-After', '1');
+    throw new ApiError(503, 'ISOLATE_MEMORY_BUSY', 'The server is busy; retry in a moment.', undefined, true);
+  }
   const maxMs = opts.maxMs ?? MEMORY_LIMITS.streamMaxMs;
   const idleMs = Math.min(opts.idleMs ?? MEMORY_LIMITS.streamIdleMs, maxMs);
   lease.setDeadlines(idleMs, maxMs);
-  const encoder = new TextEncoder();
-  let file: Uint8Array | null = bytes;
-  let at = 0;
+  let source: Iterator<Uint8Array> | null = chunks;
   let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let hardTimer: ReturnType<typeof setTimeout> | undefined;
   let resolveDone!: () => void;
-  const donePromise = new Promise<void>(r => { resolveDone = r; });
-  keepAlive(c, donePromise);
+  keepAlive(c, new Promise<void>(r => { resolveDone = r; }));
 
   const signal = c.req.raw.signal;
-  const clearTimers = () => {
+  const finish = (timedOut: boolean) => {
+    if (!source) return;
+    source = null;
     if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; }
     if (hardTimer !== undefined) { clearTimeout(hardTimer); hardTimer = undefined; }
-  };
-  const finish = (timedOut: boolean) => {
-    if (!file) return;
-    file = null;
-    clearTimers();
     signal?.removeEventListener('abort', onAbort);
     if (timedOut) {
       const err = opts.timeoutError ? opts.timeoutError() : new ApiError(504, 'DOWNLOAD_TIMEOUT', 'The response was not read in time.');
@@ -492,46 +487,52 @@ export function streamBase64JsonResponse(
   const onAbort = () => finish(false);
   const armIdle = () => {
     if (idleTimer !== undefined) clearTimeout(idleTimer);
-    if (!file || idleMs >= maxMs) return;
+    if (!source || idleMs >= maxMs) return;
     idleTimer = setTimeout(() => finish(true), idleMs);
     (idleTimer as unknown as { unref?: () => void }).unref?.();
   };
 
   lease.onReclaim(() => finish(true));
-  if (signal?.aborted) {
-    finish(false);
-    return new Response(null, { status: 499 });
-  }
+  if (signal?.aborted) { finish(false); return null; }
   signal?.addEventListener('abort', onAbort, { once: true });
-
   hardTimer = setTimeout(() => finish(true), maxMs);
   (hardTimer as unknown as { unref?: () => void }).unref?.();
 
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controllerRef = controller;
-      if (!file) { try { controller.close(); } catch { /* already closed */ } return; }
-      controller.enqueue(encoder.encode(metaJsonWithEmptyContent.slice(0, -2)));
-      armIdle();
-    },
+  return new ReadableStream<Uint8Array>({
+    start(controller) { controllerRef = controller; armIdle(); },
     pull(controller) {
-      if (!file) return;
-      if (at >= file.length) {
-        controller.enqueue(encoder.encode(metaJsonWithEmptyContent.slice(-2)));
-        controller.close();
-        finish(false);
-        return;
-      }
-      const next = Math.min(file.length, at + 3 * 64 * 1024);
-      controller.enqueue(encoder.encode(Buffer.from(file.buffer, file.byteOffset + at, next - at).toString('base64')));
-      at = next;
+      if (!source) return;
+      const next = source.next();
+      if (next.done) { controller.close(); finish(false); return; }
+      controller.enqueue(next.value);
       lease.touch();
       armIdle();
     },
     cancel() { finish(false); },
   });
+}
+
+/**
+ * Streams a binary payload as canonical base64 inside a JSON envelope (`metaJsonWithEmptyContent` ending in `""}`)
+ * while holding a self-reclaiming MemoryLease (leasedBody).
+ */
+export function streamBase64JsonResponse(c: Ctx, lease: MemoryLease, metaJsonWithEmptyContent: string, bytes: Uint8Array, opts: LeasedStreamOptions = {}): Response {
+  const encoder = new TextEncoder(), step = 3 * 64 * 1024;
+  const body = leasedBody(c, lease, (function* () {
+    yield encoder.encode(metaJsonWithEmptyContent.slice(0, -2));
+    for (let at = 0; at < bytes.length; at += step) yield encoder.encode(Buffer.from(bytes.buffer, bytes.byteOffset + at, Math.min(step, bytes.length - at)).toString('base64'));
+    yield encoder.encode(metaJsonWithEmptyContent.slice(-2));
+  })(), opts);
+  if (!body) return new Response(null, { status: 499 });
   c.header('X-Content-Type-Options', 'nosniff');
   return c.body(body, 200, { 'content-type': 'application/json' }) as unknown as Response;
+}
+
+/** Streams `bytes` as they are in 64 KiB chunks with `headers`, holding a self-reclaiming MemoryLease (leasedBody). */
+export function streamBytesResponse(c: Ctx, lease: MemoryLease, bytes: Uint8Array, headers: Record<string, string>, opts: LeasedStreamOptions = {}): Response {
+  const step = 64 * 1024;
+  const body = leasedBody(c, lease, (function* () { for (let at = 0; at < bytes.length; at += step) yield bytes.subarray(at, at + step); })(), opts);
+  return body ? new Response(body, { headers }) : new Response(null, { status: 499 });
 }
 
 /**
