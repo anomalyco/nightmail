@@ -1842,7 +1842,7 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
   assert.deepEqual((await contactOf(second)).properties,{status:'waiting',joined_at:await firstAt(second),attempts:1,email_domain:'example.net',mailbox:'company'});
   assert.deepEqual(await contactOf(coder),{name:null,properties:{},consent:'unknown',suppressed:false,deleted:true,listed:false,consents:[]});
   // Opting out sticks: later attempts keep the contact up to date and never subscribe it again.
-  await (await import('./src/audience.js')).recordUnsubscribe(runtime,platform,third.email,'footer-confirm');
+  await (await import('./src/audience/consent.js')).recordUnsubscribe(runtime,platform,third.email,'footer-confirm');
   const closed = await places();
   assert.equal(closed.open,0);
 
@@ -2252,7 +2252,7 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
 test('Nightmail customers: every account that owns a workspace joins one list in the platform workspace, made once by two runs at once and found by ID after a rename, at its verified address with when it signed up; written as an account holder without touching opt-outs, suppression or deleted contacts; a deleted account and an old address come off, and a deleted list is not made again', async t => {
   const {drizzle} = await import('drizzle-orm/node-postgres');
   const {loadConfig} = await import('./src/config.js');
-  const {signupJobs, signupsTick, CUSTOMERS_LIST_NAME, CUSTOMERS_NOTICE} = await import('./src/signups.js'), {JobDeferred} = await import('./src/jobs.js'), {recordUnsubscribe} = await import('./src/audience.js');
+  const {signupJobs, signupsTick, CUSTOMERS_LIST_NAME, CUSTOMERS_NOTICE} = await import('./src/signups.js'), {JobDeferred} = await import('./src/jobs.js'), {recordUnsubscribe} = await import('./src/audience/consent.js');
   const db = await fixtureDatabase(t);
   const pool = new pg.Pool({connectionString:FIXTURE_DATABASE_URL, max:6, connectionTimeoutMillis:5_000}); cleanup(t,()=>pool.end());
   const runtime: import('./src/core/types.js').Runtime = { db:drizzle(pool), config:loadConfig({...process.env, PUBLIC_URL:'https://customers.example.org', MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', NIGHTMAIL_HOSTED_SCREEN:'false', BANE_HOSTED_SCREEN:'false'}),
@@ -16029,7 +16029,7 @@ describe('Import property boundaries', () => {
   test('contact properties cap at 16 KiB across all write paths and audience reads page within the byte and isolate memory budgets', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
       const wid = runtime.config.workspaceId;
-      const { AUDIENCE_READ_MAX_BYTES, CONTACT_PROPERTIES_MAX_BYTES } = await import('./src/audience.js');
+      const { AUDIENCE_READ_MAX_BYTES, CONTACT_PROPERTIES_MAX_BYTES } = await import('./src/audience/schemas.js');
       const { memoryInUse, reserveMemory } = await import('./src/isolate-memory.js');
       const key = ok(await local('POST', '/v1/api-keys', { name: 'Audience bounds', permissions: ['read', 'manage'] }), 201).secret;
       const apiCall = (method: string, path: string, body?: Json) => request(method, path, key, body);
@@ -16262,7 +16262,7 @@ describe('Import property boundaries', () => {
       await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_019a000000017'||substr(replace(gen_random_uuid()::text,'-',''),14),$1,'early_'||g||'@example.com','subscribed' FROM generate_series(1,100) g`, [wid]);
       await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_019a000000097'||substr(replace(gen_random_uuid()::text,'-',''),14),$1,'late_'||g||'@example.com','subscribed' FROM generate_series(1,500) g`, [wid]);
       await db.query(`INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM audience_contacts WHERE workspace_id=$1 AND (email LIKE 'early_%' OR email LIKE 'late_%')`, [wid, probeList.id]);
-      const { snapshotCampaignAudience } = await import('./src/audience.js');
+      const { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const probeReviewId = 'rev_probe_' + randomUUID().replaceAll('-', '').slice(0, 12);
       await snapshotCampaignAudience(runtime.db, { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never, { listId: probeList.id }, probeReviewId, [], false, { leading: (await import('./src/sending.js')).probeSize });
       const lateInFirst100 = (await db.query(`SELECT count(*)::int AS n FROM sending_review_recipients WHERE review_id=$1 AND ordinal<=100 AND recipient->>'email' LIKE 'late_%'`, [probeReviewId])).rows[0].n;
@@ -16378,7 +16378,7 @@ describe('Import property boundaries', () => {
   test('import follow-ups: 48 MiB commit lease, self-reclaiming stream holds, pre-parse auth/budget gates, and queued abort rollback', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const wid = runtime.config.workspaceId;
-      const { importStream, IMPORT_COMMIT_RESERVATION_BYTES, IMPORT_GET_RESERVATION_BYTES, importPreviewReservationBytes } = await import('./src/audience.js');
+      const { importStream } = await import('./src/audience/imports.js'), { IMPORT_COMMIT_RESERVATION_BYTES, IMPORT_GET_RESERVATION_BYTES, importPreviewReservationBytes } = await import('./src/audience/schemas.js');
       const { reserveMemory, memoryInUse } = await import('./src/isolate-memory.js');
       const { SEND_LIMITS } = await import('./src/send-limits.js');
       const { createApp } = await import('./src/app.js');
@@ -16485,7 +16485,7 @@ describe('Import property boundaries', () => {
       await db.query('ANALYZE audience_contacts, audience_list_members');
 
       // 1. A1-4: >50k skinny capture with priority + referenced personalization + hashed send order.
-      const { snapshotCampaignAudience } = await import('./src/audience.js');
+      const { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const actor = { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never;
       const revId = 'rev_skinny_' + randomUUID().replaceAll('-', '').slice(0, 12);
       const snap = await snapshotCampaignAudience(runtime.db, actor, { listId: bigList.id, priority: { property: 'plan', values: ['pro', 'free'] } }, revId, ['name', 'plan'], false);
@@ -31764,7 +31764,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     // The writers of a contact's suppression and consent that no dashboard request reaches: the SES feedback batch
     // (sending.ts), the feedback job (operations.ts), scripts/lift-suppression.ts and recordUnsubscribe.
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const [{ ingestFeedbackBatch, operationJobs }, { liftSuppression }, { recordUnsubscribe }] = await Promise.all([import('./src/operations.js'), import('./scripts/lift-suppression.js'), import('./src/audience.js')]);
+      const [{ ingestFeedbackBatch, operationJobs }, { liftSuppression }, { recordUnsubscribe }] = await Promise.all([import('./src/operations.js'), import('./scripts/lift-suppression.js'), import('./src/audience/consent.js')]);
       const wid = runtime.config.workspaceId, account = '111122223333', topicArn = `arn:aws:sns:${REGION}:${account}:fixture`;
       const list = ok(await local('POST', '/v1/lists', { name: 'Counted' }), 201), people: Json[] = [], sent: Json[] = [];
       for (let i = 0; i < 4; i++) {
@@ -37229,7 +37229,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('campaign order: the list probe is a uniform sample of the whole audience, then the most engaged go first and contacts who joined since the list was last sent to go last; the review counts them', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
-      const wid = runtime.config.workspaceId, { probeSize } = await import('./src/sending.js'), { snapshotCampaignAudience } = await import('./src/audience.js');
+      const wid = runtime.config.workspaceId, { probeSize } = await import('./src/sending.js'), { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('engaged-order') }), 201);
       // 300 subscribers: 1-30 opened in the last 30 hours (1 most recently), 31-60 last opened 200 days ago, 61-200 on the
       // list when it was last sent to (yesterday), 201-300 joined since, with nothing on record.
@@ -52294,9 +52294,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
         let failAudience = 2;
         faultResolver = (specifier) => {
-          if (failAudience > 0 && specifier.endsWith('/audience.js')) {
+          if (failAudience > 0 && specifier.endsWith('/audience/routes.js')) {
             failAudience--;
-            throw new Error('synthetic audience.js group load failure');
+            throw new Error('synthetic audience/routes.js group load failure');
           }
         };
         const nodeRes = await getNode('/v1/contacts');

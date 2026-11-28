@@ -5,7 +5,7 @@ import { allowMalformedSns, snsIngress } from './core/http.js';
 import { notFound } from './core/errors.js';
 import { boundRequestBody } from './request-body.js';
 import { reserveMemory, runInMemoryScope, type MemoryLease } from './isolate-memory.js';
-import { IMPORT_PREVIEW_RATE_PER_MINUTE, importPreviewReservationBytes } from './audience.js';
+import { IMPORT_PREVIEW_RATE_PER_MINUTE, importPreviewReservationBytes } from './audience/schemas.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { getPath } from 'hono/utils/url';
 import { actor, agentSetupRefusal, filteredInboxPasswords, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute } from './core/access.js';
@@ -93,7 +93,7 @@ function loadGroupRegistrar(group: Exclude<RouteGroup, 'mcp'>): Promise<(app: Ap
         return (target: App) => { registerMcpAuth(target); registerDashboardAuth(target); };
       }
       case 'audience': {
-        const [{ registerAudience }, { registerTopics }] = await Promise.all([import('./audience.js'), import('./topics.js')]);
+        const [{ registerAudience }, { registerTopics }] = await Promise.all([import('./audience/routes.js'), import('./topics.js')]);
         return (target: App) => { registerAudience(target); registerTopics(target); };
       }
       case 'audience-query': return (await import('./audience-query.js')).registerAudienceQuery;
@@ -530,7 +530,7 @@ export async function createOpenApiApp(): Promise<App> {
     { registerMailbox }, { registerWorkspaces }, { registerProviderConnections }, { registerMcp }, { registerPublicStats }, { registerOverviewSetup }, { registerOperator },
     { registerAudit }, { registerSupport, registerSupportOperator }, { registerSupportConversations }, { registerSupportInbox }, { registerUiNotes },
   ] = await wrapModuleLoad(() => Promise.all([
-    import('./mcp-auth.js'), import('./dashboard-auth.js'), import('./audience.js'), import('./audience-query.js'),
+    import('./mcp-auth.js'), import('./dashboard-auth.js'), import('./audience/routes.js'), import('./audience-query.js'),
     import('./templates.js'), import('./sending.js'), import('./operations.js'), import('./ses-regions.js'),
     import('./mailbox.js'), import('./workspaces.js'), import('./provider-connections.js'), import('./mcp.js'), import('./public-stats.js'), import('./overview-setup.js'), import('./operator.js'),
     import('./audit.js'), import('./support.js'), import('./support-conversations.js'), import('./support-inbox.js'), import('./ui-notes.js'),

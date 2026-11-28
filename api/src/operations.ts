@@ -1821,7 +1821,7 @@ function registerPublicEvents(app: App) {
     // confirmation. Mailbox one-click (RFC 8058, List-Unsubscribe-Post) and the confirmation form are POSTs.
     // A page's host may contain & and quotes (a URL host allows them): written as text, never markup.
     const destination = token.pageUrl ? ` After unsubscribing, you’ll continue to ${escapeText(new URL(token.pageUrl).host)}.` : '';
-    const audience = await wrapModuleLoad(() => import('./audience.js'));
+    const audience = await wrapModuleLoad(() => import('./audience/consent.js'));
     // What this link may show (src/topics.ts): the workspace's topics and this address's choices, never its address or
     // anyone else's. A workspace without topics, on a link without one, keeps the plain confirmation.
     const prefs = await audience.linkPreferences(c.env.db, token.workspaceId, token.email, token.topicId);
@@ -2506,7 +2506,7 @@ const processSesReceipt: JobHandler = async (runtime, payload, job) => {
     const preferences = data.subscription?.newTopicPreferences;
     // SES topic defaults are not evidence of app-wide opt-in; never reverse local opt-outs from them.
     if (preferences?.unsubscribeAll === true && email.to.length === 1 && !email.cc.length && !email.bcc.length) {
-      await (await wrapModuleLoad(() => import('./audience.js'))).recordUnsubscribe(runtime, job.workspaceId, email.to[0]!, 'ses-subscription');
+      await (await wrapModuleLoad(() => import('./audience/consent.js'))).recordUnsubscribe(runtime, job.workspaceId, email.to[0]!, 'ses-subscription');
     } else {
       await publishEvent(runtime, { id: `evt_ses_${await digest(`${payload.topicArn}:${payload.messageId}`)}`, type: 'contact.subscription_changed', createdAt: receipt.createdAt, workspaceId: job.workspaceId, region: email.region, data: { emailId: email.id, source: 'ses', preferences: preferences ?? null, appliedToWorkspaceConsent: false } });
     }
@@ -2542,7 +2542,7 @@ const processSesReceipt: JobHandler = async (runtime, payload, job) => {
   const observeEngagement = (kind === 'Open' || kind === 'Click') && normalized.data.isBotEvent !== true && normalized.data.isBotEvent !== 'Likely';
   if (recipients.length && (suppress || observeEngagement)) await runtime.db.transaction(async tx => {
     // Several contacts are locked in email order, as the database sorts it, wherever several are (imports, the feedback
-    // batch, lockContacts in audience.ts): a bounce for two people and someone adding both to a list wait for each
+    // batch, lockContacts in audience/consent.ts): a bounce for two people and someone adding both to a list wait for each
     // other instead of deadlocking. SES lists the recipients in its own order.
     const ordered = recipients.length > 1 ? (await tx.execute<{ address: string }>(sql`SELECT address FROM unnest(${sql.param(recipients)}::text[]) address ORDER BY address`)).rows.map(row => row.address) : recipients;
     for (const address of ordered) {

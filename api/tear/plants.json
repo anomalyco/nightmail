@@ -129,14 +129,14 @@
   {
     "label": "scale-1-seqscan-page",
     "checker": "scale-reads",
-    "file": "api/src/audience.ts",
+    "file": "api/src/audience/consent.ts",
     "old": "      ORDER BY ${contacts.id} ASC LIMIT ${query.limit + 1}`;",
     "neu": "      ORDER BY ${contacts.name} ASC, ${contacts.id} ASC LIMIT ${query.limit + 1}`;"
   },
   {
     "label": "tenant-2-import-global-lock-3s",
     "checker": "tenant-isolation",
-    "file": "api/src/audience.ts",
+    "file": "api/src/audience/imports.ts",
     "old": "          const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports)",
     "neu": "          await tx.execute(sql`LOCK TABLE sending_emails IN ACCESS EXCLUSIVE MODE`); await tx.execute(sql`SELECT pg_sleep(3)`);\n          const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports)"
   },
@@ -171,7 +171,7 @@
   {
     "label": "iso-4-contacts-unscoped-get",
     "checker": "workspace-isolation",
-    "file": "api/src/audience.ts",
+    "file": "api/src/audience/schemas.ts",
     "old": "async function findContact(db: DbExecutor, identity: Actor, contactId: string) { const [row] = await db.select().from(contacts).where(and(scope(contacts, identity), eq(contacts.id, contactId), isNull(contacts.deletedAt))).limit(1); return row ?? notFound('Contact'); }",
     "neu": "async function findContact(db: DbExecutor, identity: Actor, contactId: string) { const [row] = await db.select().from(contacts).where(and(eq(contacts.id, contactId), isNull(contacts.deletedAt))).limit(1); return row ?? notFound('Contact'); }"
   },

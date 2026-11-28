@@ -63,7 +63,7 @@ export const scaleReads = model<ScaleReadState, ScaleReadAction, ScaleReadObs, S
       return true;
     });
     // Known product bug BUG-SCALE-01 (review-582.md B1, PR #596): GET /v1/contacts?listId=<small> scans every
-    // contact in the workspace because inList() uses OFFSET 0 (audience.ts).
+    // contact in the workspace because inList() uses OFFSET 0 (audience/segments.ts).
     return a.op === "ContactsSmallList" ? { next, expect, mask: "BUG-SCALE-01" } : { next, expect };
   },
 

@@ -400,7 +400,7 @@ export function nextGrowth(prev: Growth, o: { graduated: boolean; established?: 
  *    theirs, no DMARC record, or the last `windowDays` days' bounces or complaints over theirs recommend the plan.
  *  - plan: one batch a day, the first the larger of `firstBatch` and `cleanFactor` times the largest clean previous send,
  *    each next `growth` times the last, at most `maxBatches`, the last taking the rest. Contacts who opened or clicked in
- *    `engagedDays` go first, then those mailed before, never-mailed last (src/audience.ts snapshotCampaignAudience).
+ *    `engagedDays` go first, then those mailed before, never-mailed last (src/audience/counts.ts snapshotCampaignAudience).
  *  - consent: the length of a confirmed consent source.
  * A sender with no history reaches the last step in nine clean hours, having released at most about 600,000 recipients.
  */

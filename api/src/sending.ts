@@ -922,7 +922,7 @@ function draftSender(runtime: Runtime, a: Actor, draft: CampaignDraft) {
   if (a.domains.length && Object.keys(draft.audience).length) throw unrestrictedRequired(a, 'Choosing a campaign audience needs', { permission: 'audience', level: 'write' });
 }
 // A draft's audience names only this workspace's lists and segments. Another workspace's ID gets the answer of one that
-// doesn't exist, the answer the audience gives when it is read (audience.ts audienceConditions), so an ID can't be probed.
+// doesn't exist, the answer the audience gives when it is read (audience/segments.ts audienceConditions), so an ID can't be probed.
 // IDs the stored draft already names pass unchecked: a draft outlives a deleted list and must stay editable.
 async function draftAudience(db: DbExecutor, a: Actor, audience: CampaignDraft['audience'], stored: CampaignDraft['audience'] = {}) {
   const added = (now: (string | undefined)[], before: (string | undefined)[]) => [...new Set(now.filter((id): id is string => id !== undefined && !before.includes(id)))];
@@ -2333,7 +2333,7 @@ async function campaignWithFooter(runtime: Runtime, a: Actor, campaignId: string
 }
 // A draft's topic counts its opt-outs as not eligible, archived or not: archiving lets none of them through.
 const displayAudience = async (runtime: Runtime, a: Actor, draft: CampaignDraft, spec: z.infer<typeof AudienceSpec>) => {
-  const [m, topic] = await Promise.all([wrapModuleLoad(() => import('./audience.js')), campaignTopic(runtime.db, a.workspaceId, draft, false)]);
+  const [m, topic] = await Promise.all([wrapModuleLoad(() => import('./audience/counts.js')), campaignTopic(runtime.db, a.workspaceId, draft, false)]);
   return m.countCampaignAudienceForDisplay(runtime.db, a, spec, draft.requiredNotice === true, topic);
 };
 type DisplayAudience = ReturnType<typeof displayAudience>;
@@ -2351,7 +2351,7 @@ async function savedCampaignAudience(runtime: Runtime, a: Actor, row: typeof cam
   if (!withReadiness) return AudienceCounts.parse(counts);
   let readiness: z.infer<typeof CampaignReadiness> | null = null;
   if (!row.draft.requiredNotice && row.draft.from) {
-    const audienceMod = await wrapModuleLoad(() => import('./audience.js'));
+    const audienceMod = await wrapModuleLoad(() => import('./audience/counts.js'));
     const lastSent = await audienceMod.listLastSent(runtime.db, a, audience.data.listId);
     const neverMailed = await audienceMod.countNeverMailed(runtime.db, a, audience.data, false, lastSent, await campaignTopic(runtime.db, a.workspaceId, row.draft, false));
     readiness = await sendReadiness(runtime, runtime.db, a, row, { recipients: counts.eligible, matched: counts.matched, risky: counts.risky, neverMailed, lastSent });
@@ -3140,7 +3140,7 @@ async function launch(runtime: Runtime, db: DbExecutor, a: Actor, campaignId: st
   const row = await findCampaign(db, a, campaignId); editable(row, input.revision);
   // One launch of a campaign at a time, until this transaction ends: a second is refused at once instead of capturing the
   // audience again. Keyed on the workspace too, and taken only once the campaign is found in it. (Advisory lock classes:
-  // 275812 and 275815 large captures in audience.ts, 275813 public stats.)
+  // 275812 and 275815 large captures in audience/counts.ts, 275813 public stats.)
   if (!(await db.execute(sql`SELECT 1 WHERE pg_try_advisory_xact_lock(275814, hashtext(${a.workspaceId} || ':' || ${campaignId}))`)).rowCount)
     throw new ApiError(409, 'CAMPAIGN_LOCKED', 'Another request is sending this campaign; fetch it to see its state.', undefined, true);
   // The footer's postal address (CAN-SPAM), read once and frozen in the review: every copy and rebuild of this launch
@@ -3183,7 +3183,7 @@ async function launch(runtime: Runtime, db: DbExecutor, a: Actor, campaignId: st
   const choice = draft.requiredNotice ? undefined : await linkChoice(runtime, db, a.workspaceId, row.draft.from);
   const links = choice && !choice.shared ? choice.origin : undefined;
   const reviewId = id('review'), propertyKeys = placeholderKeys(draft, rendered);
-  const audienceMod = await wrapModuleLoad(() => import('./audience.js'));
+  const audienceMod = await wrapModuleLoad(() => import('./audience/counts.js'));
   const smallList = await audienceMod.isSmallAudienceList(db, a, draft.audience.listId);
   let judgedRecipients: number | undefined;
   let queued: number;
@@ -4173,7 +4173,7 @@ async function captureStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
   const staticStamp = messageStatic
     ? await prepareStaticStamp(runtime, draft, review.rendered, prepCheck.lockedAttachments, review.version)
     : undefined;
-  const audienceMod = await wrapModuleLoad(() => import('./audience.js'));
+  const audienceMod = await wrapModuleLoad(() => import('./audience/counts.js'));
   const topic = await campaignTopic(runtime.db, a.workspaceId, draft, false);
   const started = Date.now();
   let aborted = false;

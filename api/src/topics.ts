@@ -57,7 +57,7 @@ export async function contactTopicStates(db: DbExecutor, workspaceId: string, co
   return (await topicStates(db, workspaceId, contactId, null)).map(({ id, archived: _, ...row }) => ({ topicId: id, ...row }));
 }
 
-/** A send's topic as its audience reads it (src/audience.ts consented). subscribedByDefault never changes. */
+/** A send's topic as its audience reads it (src/audience/counts.ts consented). subscribedByDefault never changes. */
 export type TopicRule = { id: string; subscribedByDefault: boolean };
 /**
  * The topic a send names: TOPIC_NOT_FOUND unless the workspace has it, and, with `active`, it isn't archived (a new send
