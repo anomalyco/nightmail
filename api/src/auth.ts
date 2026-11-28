@@ -526,12 +526,12 @@ export function registerAuth(app: App) {
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/agent-tokens/{id}/revoke', operationId: 'revokeAgentToken', tags: ['Auth'], security, request: { params: IdParams }, responses: { 200: response(z.object({ id: z.string(), revoked: z.literal(true) })), ...errors } }), async c => {
     const identity = manageKeys(c), tokenId = c.req.valid('param').id;
-    // A repeated revoke keeps the first revocation time and writes no second audit row.
+    // A repeated revoke skips the UPDATE and writes no second audit row while still returning 200.
     const { rows: [row] } = await c.env.db.execute<{ id: string }>(sql`WITH prior AS (SELECT id, revoked_at IS NULL AS fresh FROM agent_tokens WHERE workspace_id = ${identity.workspaceId} AND id = ${tokenId} FOR UPDATE),
-      t AS (UPDATE agent_tokens SET revoked_at = coalesce(revoked_at, now()) FROM prior WHERE agent_tokens.workspace_id = ${identity.workspaceId} AND agent_tokens.id = prior.id
-        RETURNING agent_tokens.id, agent_tokens.purpose, prior.fresh),
+      t AS (UPDATE agent_tokens SET revoked_at = now() FROM prior WHERE agent_tokens.workspace_id = ${identity.workspaceId} AND agent_tokens.id = prior.id AND prior.fresh
+        RETURNING agent_tokens.id, agent_tokens.purpose),
       a AS (${auditInsert(auditContext(c), { action: 'agent_token.revoke', workspaceId: identity.workspaceId, target: { type: 'agent_token', id: sql`t.id` },
-        before: sql`jsonb_build_object('purpose', left(t.purpose, 200))` }, { from: sql`t`, where: sql`t.fresh` })}) SELECT id FROM t`);
+        before: sql`jsonb_build_object('purpose', left(t.purpose, 200))` }, { from: sql`t` })}) SELECT prior.id FROM prior LEFT JOIN t ON true`);
     if (!row) throw new ApiError(404, 'NOT_FOUND', 'Agent token was not found.');
     return c.json({ id: row.id, revoked: true as const }, 200);
   });
@@ -600,12 +600,12 @@ export function registerAuth(app: App) {
       if (!revoked) throw new ApiError(404, 'NOT_FOUND', 'API key was not found.');
       return c.json({ id: revoked.row.id, revoked: true as const }, 200);
     }
-    // A repeated revoke keeps the first revocation time and writes no second audit row.
+    // A repeated revoke skips the UPDATE and writes no second audit row while still returning 200.
     const { rows: [key] } = await c.env.db.execute<{ id: string }>(sql`WITH prior AS (SELECT id, revoked_at IS NULL AS fresh FROM api_keys WHERE id = ${keyId} AND workspace_id = ${auth.workspaceId} FOR UPDATE),
-      k AS (UPDATE api_keys SET revoked_at = coalesce(revoked_at, now()) FROM prior WHERE api_keys.id = prior.id AND api_keys.workspace_id = ${auth.workspaceId}
-        RETURNING api_keys.id, api_keys.name, left(api_keys.prefix, 9) AS prefix, prior.fresh),
+      k AS (UPDATE api_keys SET revoked_at = now() FROM prior WHERE api_keys.id = prior.id AND api_keys.workspace_id = ${auth.workspaceId} AND prior.fresh
+        RETURNING api_keys.id, api_keys.name, left(api_keys.prefix, 9) AS prefix),
       a AS (${auditInsert(auditContext(c), { action: 'api_key.revoke', workspaceId: auth.workspaceId, target: { type: 'api_key', id: sql`k.id` },
-        before: sql`jsonb_build_object('name', k.name, 'prefix', k.prefix)` }, { from: sql`k`, where: sql`k.fresh` })}) SELECT id FROM k`);
+        before: sql`jsonb_build_object('name', k.name, 'prefix', k.prefix)` }, { from: sql`k` })}) SELECT prior.id FROM prior LEFT JOIN k ON true`);
     if (!key) throw new ApiError(404, 'NOT_FOUND', 'API key was not found.');
     return c.json({ id: key.id, revoked: true as const }, 200);
   });

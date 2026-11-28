@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, digest, webhookUrlHint, type Ctx, type Database, type DbExecutor } from './core.js';
+import { ApiError, digest, mailboxRoute, webhookUrlHint, type Ctx, type Database, type DbExecutor } from './core.js';
 import { utf8Bytes } from './read-bounds.js';
 import { SEND_LIMITS } from './send-limits.js';
 
@@ -161,8 +161,8 @@ export const MAILBOX_CREATES = [
   /^\/v1\/inbound\/(?:addresses|webhooks)$/,
   /^\/v1\/inbound\/domains\/[^/]+\/subdomains$/,
 ];
-/** Whether POST <path> is covered by the create Idempotency-Key middleware. */
-export const createKeyRoute = (path: string) => AUTHENTICATED_CREATES.some(p => p.test(path)) || MAILBOX_CREATES.some(p => p.test(path));
+/** Whether POST <path> is covered by the create Idempotency-Key middleware (matching app.ts/mailbox.ts partitioning). */
+export const createKeyRoute = (path: string) => (mailboxRoute(path) ? MAILBOX_CREATES : AUTHENTICATED_CREATES).some(p => p.test(path));
 // Field names that hold credentials at any depth (createInbox nests its key under credential.secret).
 // "key" is not one: addresses and webhooks use it for their routing key.
 const SECRET_FIELDS = new Set(['secret', 'token', 'verificationToken', 'password']);

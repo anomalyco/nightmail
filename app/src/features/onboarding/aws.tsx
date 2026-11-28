@@ -6,6 +6,7 @@ import { BootLoader } from '../../components/BootLoader'
 import { useGuardedMutation } from '../../lib/single-flight'
 import { useApiQuery } from '../../data/context'
 import { connectionApi } from '../../data/connections'
+import { walkSendingDomains } from '../../data/queries'
 import { domainPattern, normalizeDomain } from '../../lib/domain'
 import { ApiError, errorText, type ByoCandidate, type ByoRegion, type ProviderConnection } from '../../data/types'
 import { productName } from '../../../../api/src/brand'
@@ -214,16 +215,8 @@ function SettingUp({ regions }: { regions: ByoRegion[] }) {
 
 // A domain added in the connect step exists once its region is set up: then the add-domain step opens its records.
 export function PendingDomain({ name, onFound }: { name: string; onFound: (id: string | null) => void }) {
-  const domains = useApiQuery(['domains', 'onboarding-aws', name], async (api, signal) => {
-    let cursor: string | undefined
-    for (let pages = 0; pages < 20; pages++) {
-      const page = await api.domains.list({ pageSize: 10, cursor, refresh: false }, signal)
-      const hit = page.items.find(domain => domain.name === name)
-      if (hit || !page.nextCursor) return hit ?? null
-      cursor = page.nextCursor
-    }
-    return null
-  }, { interval: 2000 })
+  const domains = useApiQuery(['domains', 'onboarding-aws', name], async (api, signal) =>
+    (await walkSendingDomains(api, signal)).find(domain => domain.name === name) ?? null, { interval: 2000 })
   const found = domains.data
   useEffect(() => { if (found) onFound(found.id) }, [found?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const timer = setTimeout(() => onFound(null), 120_000); return () => clearTimeout(timer) }, []) // eslint-disable-line react-hooks/exhaustive-deps

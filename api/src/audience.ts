@@ -1164,16 +1164,18 @@ export function registerAudience(app: App) {
       };
       if (listIds !== undefined) {
         const desiredLists = [...new Set(listIds)].sort();
+        const canManage = identity.permissions.includes('manage');
         contact = await c.env.db.transaction(async tx => {
+          // Strict lock order everywhere: lists (FOR SHARE, asc id) -> contacts (UPDATE) -> listMembers.
+          // Callers with manage lock desiredLists before contacts; callers without manage never lock lists
+          // and roll back with 403 after reading memberships under the contact row lock if they differ.
+          if (canManage) await lockLists(tx, identity, desiredLists);
+          const updated = await updateRow(tx);
           const current = await tx.select({ listId: listMembers.listId }).from(listMembers).innerJoin(lists, and(eq(lists.workspaceId, listMembers.workspaceId), eq(lists.id, listMembers.listId))).where(and(scope(listMembers, identity), eq(listMembers.contactId, contactId)));
           const currentSet = new Set(current.map(row => row.listId));
           const changed = desiredLists.length !== currentSet.size || desiredLists.some(listId => !currentSet.has(listId));
           if (changed) {
-            actor(c, 'manage');
-            await lockLists(tx, identity, desiredLists);
-          }
-          const updated = await updateRow(tx);
-          if (changed) {
+            if (!canManage) actor(c, 'manage');
             await tx.delete(listMembers).where(and(scope(listMembers, identity), eq(listMembers.contactId, contactId), desiredLists.length ? notInArray(listMembers.listId, desiredLists) : undefined));
             if (desiredLists.length) await tx.insert(listMembers).values(desiredLists.map(listId => ({ ...scopeValues(identity), listId, contactId }))).onConflictDoNothing();
           }
