@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { SignInConsent } from '../../components/LegalLinks'
-import { WaitlistLine } from '../home/get-started'
 import { Cells, CELLS, Claim, keys, Mark, opensPainted, useHall, type Start } from './board'
 import { calculatorPath, CheckedPages, Ours, PRESETS, sizeOf, Terms, type Field } from './content'
 import { Bolts } from './eggs'
@@ -105,7 +104,7 @@ export function PricingBoard({ start }: { start?: Start }) {
       </div>
       {start?.button('cb-key cb-key-start')}
     </div>
-    {start && !start.signedIn && <><SignInConsent className="cb-consent cb-consent-hero" /><WaitlistLine className="cb-consent cb-consent-hero cb-full" full={start.full} /></>}
+    {start && !start.signedIn && <SignInConsent className="cb-consent cb-consent-hero" />}
     <div className="cb-print">
       <p>Nightmail charges {nightmail.perThousand} per 1,000 emails sent or received, after {formatCount(nightmail.freeSent)} sent and {formatCount(nightmail.freeReceived)} received free every month.</p>
       <Terms floor={floor} />

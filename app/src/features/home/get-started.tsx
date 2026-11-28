@@ -20,8 +20,3 @@ export function GetStartedButton({ className, style, ref, busy = false, full = f
     </span>
   </button>
 }
-/** What a full Nightmail means for a visitor, under the way in. Always laid out, and visible only when `full`, so it
- *  appearing after load moves nothing. */
-export function WaitlistLine({ className, full = false }: { className: string; full?: boolean }) {
-  return <p className={`srt-wait-line ${className}`} data-off={full ? undefined : ''}>Full for now. Join the waitlist and we’ll email you.</p>
-}

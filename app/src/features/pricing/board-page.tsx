@@ -7,7 +7,6 @@
 import { useSession } from '../../data/context'
 import type { HomeStart } from '../home'
 import { StartButton } from '../home/start'
-import { useSignupsFull } from '../home/signups-open'
 import type { Start } from './board'
 import { Scene } from './scene'
 import type { Comparison } from './prices'
@@ -19,7 +18,6 @@ export function PriceScene({ comparison, frame }: { comparison?: Comparison | nu
   const session = useSession()
   const start: HomeStart = session?.identity ? { signedIn: true }
     : { signedIn: false, onSignIn: () => session?.signIn(comparison?.focus), onSignInIntent: event => session?.signInIntent(event, comparison?.focus), busy: session?.signingIn ?? false, waitUntil: session?.signInWaitUntil ?? null }
-  const full = useSignupsFull(!start.signedIn)
-  const way: Start = { signedIn: start.signedIn, full, button: className => <StartButton start={start} className={className} /> }
+  const way: Start = { signedIn: start.signedIn, button: className => <StartButton start={start} className={className} /> }
   return <Scene comparison={comparison} start={way} frame={frame} />
 }

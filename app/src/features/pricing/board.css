@@ -188,7 +188,6 @@
 .cb-consent { margin-top: 14px; color: var(--cb-caption); font-size: 13px; line-height: 18px; text-wrap: balance; }
 .cb-consent a { color: var(--cb-paper); }
 .cb-consent-hero { width: min(100%, 1000px); margin-top: 16px; text-align: end; }
-.cb-consent-hero.cb-full { margin-top: 2px; }
 
 /* ── The calculator (calculator.tsx): the same board, Nightmail's row and then one for each other vendor priced for the
    reader's numbers, a little smaller (its name, its plan engraved beside it, its price, its bar); the small print with

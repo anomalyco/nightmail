@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import { useSession } from '../../../data/context'
 import type { HomeStart } from '../../home'
 import { StartButton } from '../../home/start'
-import { useSignupsFull } from '../../home/signups-open'
 import type { Start } from '../board'
 import type { Comparison } from '../prices'
 import { comparisonDoc } from './comparison'
@@ -23,8 +22,7 @@ function useStart(focus: PageDoc['focus']): Start {
   const session = useSession()
   const start: HomeStart = session?.identity ? { signedIn: true }
     : { signedIn: false, onSignIn: () => session?.signIn(focus), onSignInIntent: event => session?.signInIntent(event, focus), busy: session?.signingIn ?? false, waitUntil: session?.signInWaitUntil ?? null }
-  const full = useSignupsFull(!start.signedIn)
-  return { signedIn: start.signedIn, full, button: className => <StartButton start={start} className={className} /> }
+  return { signedIn: start.signedIn, button: className => <StartButton start={start} className={className} /> }
 }
 
 export function ComparisonView({ comparison }: { comparison: Comparison }) {

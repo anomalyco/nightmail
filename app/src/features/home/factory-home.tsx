@@ -1,10 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { SignInConsent } from '../../components/LegalLinks'
-import { Alert } from '../../components/ui/primitives'
 import { useTheme } from '../../lib/theme'
 import type { HomeProps } from '.'
 import { StartButton } from './start'
-import { useSignupsFull } from './signups-open'
 import { plan, type Plan } from './plan'
 import { toneVars } from './tones'
 import { Machines } from './machines'
@@ -71,10 +69,8 @@ export function FactoryHome({ start, notice, format }: HomeProps & { format: For
   const m = MANIFESTS[format], { vars: frameVars, button: buttonBox } = FRAMES[format]
   const still = format === 'phone'
   const visitor = start.signedIn ? null : start
-  // No place open (signups-open.ts): the button says Join the waitlist, and the notice slot says why, unless a sign-in
-  // has something of its own to say there.
-  const full = useSignupsFull(!!visitor)
-  const shown = notice || (full ? <Alert tone="info">Full for now. Join the waitlist and we’ll email you when a place opens.</Alert> : null)
+  // The notice slot: what a sign-in has to say. With no place open the button says Join the waitlist itself.
+  const shown = notice
   const dark = useTheme().theme === 'dark'
   const scene = useRef<HTMLElement>(null), probe = useRef<HTMLDivElement>(null), stage = useRef<HTMLDivElement>(null), frame = useRef<HTMLDivElement>(null)
   const bg = useRef<HTMLDivElement>(null), boards = useRef<HTMLDivElement>(null), fg = useRef<HTMLDivElement>(null), tags = useRef<HTMLDivElement>(null)

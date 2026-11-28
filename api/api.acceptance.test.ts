@@ -1532,7 +1532,7 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
     return async () => {
       const done = await callback(cookie);
       const location = new URL(done.headers.get('location')!);
-      return { auth: location.searchParams.get('auth'), place: location.searchParams.get('place'), link: location.searchParams.get('link'), account: location.searchParams.get('account'), position: location.searchParams.get('position'),
+      return { auth: location.searchParams.get('auth'), place: location.searchParams.get('place'), via: location.searchParams.get('via'), link: location.searchParams.get('link'), account: location.searchParams.get('account'), position: location.searchParams.get('position'),
         landed: location.pathname + location.search, session: done.headers.getSetCookie().find(v=>v.startsWith('__Host-nightmail.session_token='))?.split(';')[0] ?? '',
         waitlist: done.headers.getSetCookie().find(v=>v.startsWith('__Host-nightmail.waitlist='))?.split(';')[0] ?? '',
         replay: async (held: string) => new URL((await callback(held)).headers.get('location')!).search };
@@ -1991,7 +1991,10 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
   const capture = t.mock.method(console,'warn',(line: string) => { try { const o = JSON.parse(line); if (o.code === 'SIGN_IN_NOT_APPROVED') refusals.push(o); } catch { warn(line); } });
   for (const upstream of [{}, {email:unverified.email,email_verified:false}]) {
     unverified.upstream = upstream;
-    assert.deepEqual(await signIn(unverified).then(r=>[r.auth,r.place,r.session]),['waitlist','ready',''],JSON.stringify(upstream));
+    const refused = await signIn(unverified);
+    assert.deepEqual([refused.auth,refused.place,refused.session],['waitlist','ready',''],JSON.stringify(upstream));
+    // A refused GitHub sign-in says so (via=github), so the waitlist screen can say GitHub counts only a verified primary email.
+    assert.equal(refused.via,'github');
   }
   sibling.upstream = {email:dev.email,email_verified:true};
   await signIn(sibling);

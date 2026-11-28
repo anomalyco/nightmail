@@ -376,6 +376,8 @@ const pages = ids => [
   // The same refusal for a GitHub or password sign-in that showed nothing of its address, with a place open for it: a
   // sign-in link to it in one click.
   ['Signed out · waitlist, place ready', '/?auth=waitlist&place=ready', { user: null, waitlist: 'kwame.mensah@example.net' }],
+  // The refused sign-in was GitHub's: the line says GitHub counts only a verified primary email.
+  ['Signed out · waitlist, place ready via GitHub', '/?auth=waitlist&place=ready&via=github', { user: null, waitlist: 'kwame.mensah@example.net' }],
   // A place held for its address that the sign-in didn't show is the person's (GitHub without it verified): a sign-in
   // link to it in one click; and the refusal after a used or expired link.
   ['Signed out · waitlist, place held', '/?auth=waitlist&place=held', { user: null, waitlist: 'ines.duarte@example.net' }],
@@ -669,6 +671,7 @@ const phonePages = new Set([
   'Signed out · connect',
   'Signed out · waitlist',
   'Signed out · waitlist, place ready',
+  'Signed out · waitlist, place ready via GitHub',
   'Signed out · waitlist, place held',
   'Signed out · waitlist, link expired',
   'Signed out · sign-in link',

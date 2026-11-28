@@ -5,7 +5,6 @@ import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { NightmailWordmark } from '../../components/NightmailLogo'
 import { SignInConsent } from '../../components/LegalLinks'
 import { EndBand, endBand } from '../home/end-band'
-import { WaitlistLine } from '../home/get-started'
 import { toneVars } from '../home/tones'
 import { calculatorPath, Checked, CheckedPages, Cite, Ours, ReadOn, Terms } from './content'
 import { Features } from './features'
@@ -91,9 +90,9 @@ function Fader({ c, size, onChange, onStop, bump, id }: { c: Comparison; size: n
 export const opensPainted = () => typeof document === 'undefined' || document.getElementById('price-shell') !== null
 
 /** The way in (board-page.tsx gives it: the homepage's Get started, or Open dashboard for someone signed in), drawn in
- *  a class of the page's. Without it (the pre-merge check's render) the page has no button. full: no place is open, so
- *  a visitor's way in joins the waitlist (home/signups-open.ts), and the line under it says so. */
-export type Start = { signedIn: boolean; full?: boolean; button: (className: string) => ReactNode }
+ *  a class of the page's. Without it (the pre-merge check's render) the page has no button. With no place open its label
+ *  says Join the waitlist (home/get-started.tsx); nothing under it repeats that. */
+export type Start = { signedIn: boolean; button: (className: string) => ReactNode }
 
 /** The hall's shared state for the board hung in it: `refresh` turns every tile over (the board clicked, "night" typed),
  *  `resend` is the board's click, and `sounding` says a board opening now should be heard: the reader moved to it from
@@ -189,7 +188,7 @@ export function ComparisonBoard({ comparison: c, start }: { comparison: Comparis
       <Link className="cb-try" to={calculatorPath(p.usage)}>Try your numbers<ArrowRight size={17} strokeWidth={2} aria-hidden="true" /></Link>
       {start?.button('cb-key cb-key-start')}
     </div>
-    {start && !start.signedIn && <><SignInConsent className="cb-consent cb-consent-hero" /><WaitlistLine className="cb-consent cb-consent-hero cb-full" full={start.full} /></>}
+    {start && !start.signedIn && <SignInConsent className="cb-consent cb-consent-hero" />}
   </>
 }
 
