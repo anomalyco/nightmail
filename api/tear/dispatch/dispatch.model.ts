@@ -1055,7 +1055,8 @@ const dispatchIdleRules: IdleRule<DispatchSnapshot>[] = [
       return undefined;
     },
   },
-  // Temporal rule 2 of 5: backoff: a throttled row waits 2 s (1990 ms tolerance) before retry.
+  // Temporal rule 2 of 5: backoff: a throttled row waits 2 s ±25% (jittered, src/dispatcher.ts) before retry: at least
+  // 1.5 s (1490 ms tolerance).
   {
     id: "dispatch.backoff",
     description: "a throttled row waits 2 s before retry",
@@ -1067,8 +1068,8 @@ const dispatchIdleRules: IdleRule<DispatchSnapshot>[] = [
         if (!e.mail) continue;
         const prev = lastThrottle.get(e.mail);
         if (prev !== undefined) {
-          if (e.at < prev + 1990) {
-            return `mail ${e.mail}: retried ${e.at - prev}ms after throttle (need >= 1990ms)`;
+          if (e.at < prev + 1490) {
+            return `mail ${e.mail}: retried ${e.at - prev}ms after throttle (need >= 1490ms)`;
           }
           lastThrottle.delete(e.mail);
         }

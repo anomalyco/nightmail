@@ -395,6 +395,8 @@ impl Api {
 const UPLOAD: Duration = Duration::from_secs(120);
 /// What one command (a FETCH, SEARCH or SELECT, or a large change in all its batches) may spend on API calls.
 pub const COMMAND: Duration = Duration::from_secs(60);
+/// What showing a committed change may spend after its command ran out of time (Store::settle).
+const SETTLE: Duration = Duration::from_secs(10);
 /// What the view reserves for each message of an open folder, besides its flags.
 const ENTRY: usize = 200;
 /// A refusal's status and the API's error object (`{"error":{"code":…,"message":…}}`), from at most 64 KiB of its
@@ -791,6 +793,9 @@ impl Store {
     /// or APPEND that already happened); the snapshot stays as it was and the next command
     /// refreshes it.
     fn settle(&mut self) {
+        // A change that stopped at the command's deadline still shows what it committed: the refresh gets a short
+        // allowance of its own, or a past deadline would fail its first page of deltas with Limit.
+        self.deadline = self.deadline.max(Instant::now() + SETTLE);
         if self.refresh().is_err() {
             self.dirty = true
         }
@@ -2841,6 +2846,9 @@ mod tests {
         store.deadline = Instant::now() - Duration::from_millis(1);
         assert!(matches!(change(&mut store), Err(store::Error::Partial)));
         assert_eq!(script.mutations.lock().unwrap().len(), 1);
+        // The batch that committed is still shown: the refresh after it got its own allowance past the deadline.
+        assert!(store.deadline > Instant::now());
+        assert!(!store.dirty);
         store.deadline = Instant::now() + COMMAND;
         assert!(change(&mut store).is_ok());
         assert_eq!(script.mutations.lock().unwrap().len(), 4);

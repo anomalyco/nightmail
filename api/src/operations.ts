@@ -193,7 +193,8 @@ export async function postWebhook(runtime: Runtime, url: string, headers: Record
   const trip=(holdMs:number)=>{
     const last=hookTimeouts.get(key), count=1+(last && last.until>Date.now()?last.count:0);
     if(!last && hookTimeouts.size>=1024)hookTimeouts.delete(hookTimeouts.keys().next().value!);
-    hookTimeouts.set(key,{count,until:Date.now()+Math.max(30000+timeoutSeconds*1000,Math.min(holdMs,15*60000))});
+    // A later timeout or 503 never shortens a window an endpoint's Retry-After already asked for.
+    hookTimeouts.set(key,{count,until:Math.max(last?.until??0,Date.now()+Math.max(30000+timeoutSeconds*1000,Math.min(holdMs,15*60000)))});
   };
   try {
     const result=runtime.webhookFetch?await runtime.webhookFetch(url,init):await fetch(url,{...init,redirect:'manual'});

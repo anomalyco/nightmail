@@ -3240,6 +3240,10 @@ registerMemoryCache({ bytes: () => attachmentCache.bytes, evict: evictAttachment
 const attachmentLoads = new WeakMap<Storage, Map<string, Promise<Uint8Array>>>();
 /** Object storage threw on a read (R2 or S3 down or timing out), as opposed to answering without the object. Retryable:
  *  the dispatcher holds a shard's attachment mail together until it is back (src/dispatcher.ts STORAGE_MS). */
+let liveReads = 0;
+/** How many attachment reads storage has answered in this isolate (not served from the cache): a dispatcher batch whose
+ *  count moved knows storage is back. */
+export const attachmentReads = () => liveReads;
 export const storageUnavailable = () => new ApiError(503, 'STORAGE_TEMPORARILY_UNAVAILABLE', 'Attachment storage is temporarily unavailable; the message will be retried.', undefined, true);
 export async function verifiedAttachment(runtime: Runtime, row: typeof attachments.$inferSelect) {
   const scope = runtime.storage.cacheScope ?? runtime.storage, cache = attachmentCache;
@@ -3257,6 +3261,7 @@ export async function verifiedAttachment(runtime: Runtime, row: typeof attachmen
       if (error instanceof ApiError || error instanceof ModuleLoadError) throw error;
       throw storageUnavailable();
     });
+    liveReads++;
     if (!asset || asset.body.length !== row.size || await bytesDigest(asset.body) !== row.checksum) throw new ApiError(503, 'ATTACHMENT_STORAGE_UNAVAILABLE', 'An immutable attachment is missing or changed.', undefined, true);
     const already = cache.entries.get(key);
     if (already) return already;

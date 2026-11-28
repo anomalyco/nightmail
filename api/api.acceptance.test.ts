@@ -51015,12 +51015,76 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const row = (await db.query('SELECT status,error_code,scheduled_at FROM sending_emails WHERE id=$1', [email.id])).rows[0];
         assert.deepEqual([row.status, row.error_code], ['queued', 'SES_THROTTLED'], `throttle ${i + 1}`);
         const wait = Date.parse(row.scheduled_at.toISOString()), base = 2000 * 2 ** i;
-        assert.ok(wait >= before + Math.min(0.75 * base, 300_000) - 50 && wait <= after + Math.min(1.25 * base, 300_000) + 50, `throttle ${i + 1}: waited ${wait - before} ms`);
+        // ±25%, and at the 5-minute cap spread over its last quarter.
+        assert.ok(wait >= before + Math.min(0.75 * base, 225_000) - 50 && wait <= after + Math.min(1.25 * base, 300_000) + 50, `throttle ${i + 1}: waited ${wait - before} ms`);
         await db.query('UPDATE sending_emails SET scheduled_at=now() WHERE id=$1', [email.id]);
       }
       await run('email.dispatch');
       const accepted = ok(await local('GET', `/v1/emails/${email.id}`));
-      assert.deepEqual([accepted.status, accepted.providerId, sends], ['accepted', 'accepted-after-throttling', throttles.length + 1]);
+      // Accepted mail keeps no error from the throttles before it.
+      assert.deepEqual([accepted.status, accepted.providerId, accepted.errorCode, sends], ['accepted', 'accepted-after-throttling', null, throttles.length + 1]);
+      // A 400 refusal whose text names an address like throttle@example.com is a refusal, not throttling.
+      t.mock.method(SESv2Client.prototype, 'send', async () => { throw Object.assign(new Error('Email address is not verified. The following identities failed the check: throttle@example.com'), { name: 'MessageRejected', $metadata: { httpStatusCode: 400 } }); });
+      const refused = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      await run('email.dispatch');
+      const row = ok(await local('GET', `/v1/emails/${refused.id}`));
+      assert.deepEqual([row.status, row.errorCode], ['rejected', 'MessageRejected']);
+    });
+  });
+
+  test('dispatch wake-ups: attachment mail waiting out a storage outage, and mail a busy claim gave back, wake the shard when due; only a live storage read ends the outage', async t => {
+    await simulatedSesFixture(t, async ({ runtime, local, db }) => {
+      const [{ SESv2Client, GetAccountCommand }, { dispatchDue, initialGate }, { PgDialect }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/dispatcher.js'), import('drizzle-orm/pg-core')]);
+      let sends = 0;
+      t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
+        if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } };
+        sends++; return { MessageId: unique('accepted') };
+      });
+      const objects = new Map<string, { body: Uint8Array; contentType: string }>();
+      let down = false, gets = 0;
+      t.mock.method(runtime.storage, 'put', async (k: string, body: Uint8Array, contentType: string) => { objects.set(k, { body, contentType }); });
+      t.mock.method(runtime.storage, 'get', async (k: string) => { gets++; if (down) throw new Error('connect ETIMEDOUT'); return objects.get(k) ?? null; });
+      const file = ok(await local('POST', '/v1/attachments', { filename: 'notes.txt', contentType: 'text/plain', content: Buffer.from(unique('notes')).toString('base64') }), 201);
+      const row = async (id: string) => (await db.query('SELECT status,error_code,extract(epoch FROM lease_until)*1000 AS lease FROM sending_emails WHERE id=$1', [id])).rows[0];
+      const gate = initialGate(), dispatch = () => dispatchDue(runtime, REGION, { gate });
+      // Storage throws: the shard opens one window, 15 s ±25%, and the run sleeps until it ends instead of polling.
+      down = true;
+      const first = ok(await local('POST', '/v1/emails/send', mail({ attachments: [file.id] })), 202);
+      const before = Date.now(), outage = await dispatch();
+      const until = gate.storageUntil!;
+      assert.ok(until >= before + 11_250 && until <= Date.now() + 18_750, `window ${until - before} ms`);
+      assert.deepEqual([outage.idle, outage.paceRetryAt, gate.storageStreak], [true, until, 1]);
+      let held = await row(first.id);
+      assert.equal(held.status, 'queued'); assert.ok(Math.abs(Number(held.lease) - until) < 1000);
+      // Mail that waits out the window without asking storage proves nothing: the window and its streak stay.
+      down = false;
+      const second = ok(await local('POST', '/v1/emails/send', mail({ attachments: [file.id] })), 202);
+      const readsBefore = gets, waiting = await dispatch();
+      assert.deepEqual([waiting.paceRetryAt, gets, gate.storageUntil, gate.storageStreak, (await row(second.id)).status], [until, readsBefore, until, 1, 'queued']);
+      // The window ends and storage answers: both send and the outage is over.
+      gate.storageUntil = Date.now() - 1;
+      await db.query('UPDATE sending_emails SET lease_until=NULL WHERE id = ANY($1)', [[first.id, second.id]]);
+      const back = await dispatch();
+      assert.deepEqual([back.sent, gets > readsBefore, gate.storageUntil, gate.storageStreak], [2, true, undefined, undefined]);
+      // A cached attachment is no live read: a streak left from an earlier outage is kept.
+      gate.storageStreak = 2;
+      const cached = ok(await local('POST', '/v1/emails/send', mail({ attachments: [file.id] })), 202), readsCached = gets;
+      assert.equal((await dispatch()).sent, 1);
+      assert.deepEqual([gets, gate.storageStreak, (await row(cached.id)).status], [readsCached, 2, 'accepted']);
+      // A claim that waits past its lock_timeout gives its mail back for 5 s, and the run wakes then.
+      const dialect = new PgDialect(), execute = runtime.db.execute.bind(runtime.db);
+      let refused = 0;
+      t.mock.method(runtime.db, 'execute', async (query: Parameters<typeof execute>[0]) => {
+        if (!refused && dialect.sqlToQuery((query as { getSQL(): import('drizzle-orm').SQL }).getSQL()).sql.includes('before AS MATERIALIZED')) { refused++; throw Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' }); }
+        return execute(query);
+      });
+      const busy = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      const claimStart = Date.now(), contended = await dispatch();
+      assert.equal(refused, 1);
+      assert.ok(contended.idle && contended.paceRetryAt! >= claimStart + 5000 && contended.paceRetryAt! <= Date.now() + 5000, `wake ${contended.paceRetryAt! - claimStart} ms`);
+      held = await row(busy.id);
+      assert.equal(held.status, 'queued'); assert.ok(Math.abs(Number(held.lease) - contended.paceRetryAt!) < 1000);
+      assert.equal(sends, 3);
     });
   });
 

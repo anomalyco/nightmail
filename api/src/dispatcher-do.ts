@@ -149,7 +149,7 @@ export class DispatcherShard extends DurableObject<Env> {
       // Throttle and guard gate persistence: a transient DO storage error must never crash a healthy run into a 15 s retry.
       const GATE_PERSIST_MS = 2000;
       let lastPersistAt = 0, lastPersistKey = '';
-      const gateKey = (s: GateState) => `${s.quota?.checkedAt ?? 0}:${s.brakeUntil ?? 0}:${s.marketingBrakeUntil ?? 0}:${s.outageUntil ?? 0}:${s.accountPauseAt ?? 0}:${s.dailyBlockedUntil ?? 0}`;
+      const gateKey = (s: GateState) => `${s.quota?.checkedAt ?? 0}:${s.brakeUntil ?? 0}:${s.marketingBrakeUntil ?? 0}:${s.outageUntil ?? 0}:${s.accountPauseAt ?? 0}:${s.dailyBlockedUntil ?? 0}:${s.storageUntil ?? 0}`;
       const persistGate = async (state: GateState, force = false) => {
         const now = Date.now(), key = gateKey(state);
         if (!force && key === lastPersistKey && now - lastPersistAt < GATE_PERSIST_MS) return;
@@ -171,13 +171,19 @@ export class DispatcherShard extends DurableObject<Env> {
       });
       await persistGate(gate, true);
       // Error lines from a run that succeeded (SES paused or refusing credentials, acceptance unknown) reach the health
-      // tick too, not only a failed run's (src/health-counters.ts). Counts flush at most every 20 s, on the run's pool.
-      if (deps.countersDue()) this.ctx.waitUntil(deps.flushCounters(runtime.db));
+      // tick too, not only a failed run's (src/health-counters.ts). Counts flush at most every 20 s, on the run's pool, and
+      // after every idle run: the object may be evicted before the next one. With nothing counted the flush is no query.
+      if (report?.idle !== false || deps.countersDue()) this.ctx.waitUntil(deps.flushCounters(runtime.db));
       if (!this.placementLogged) { this.placementLogged = true; this.ctx.waitUntil(this.logPlacement(identity, runtime)); }
       const count = desired();
       if (count !== identity.shard.count) {
-        if (!report?.idle && identity.shard.index === 0 && this.env?.DISPATCHER) {
-          this.ctx.waitUntil(Promise.allSettled(Array.from({ length: count }, (_, i) => {
+        // This shard is retired: a retry a wake displaced must not bring it back.
+        await this.ctx.storage.delete('displacedAlarm');
+        // Mail is waiting: shard 0 wakes the whole new generation, any other shard only the one that takes its share, so
+        // a wake that reached just this shard is not lost and a resize is not a fan-out from every old shard.
+        if (!report?.idle && this.env?.DISPATCHER) {
+          const targets = identity.shard.index === 0 ? Array.from({ length: count }, (_, i) => i) : [identity.shard.index % count];
+          this.ctx.waitUntil(Promise.allSettled(targets.map(i => {
             const target: Identity = { accountId: identity.accountId, region: identity.region, shard: { index: i, count }, autoScale: true };
             const stub = this.env.DISPATCHER.get(this.env.DISPATCHER.idFromName(dispatcherName(target)), { locationHint: 'enam' });
             return stub.fetch(`https://dispatcher/wake?region=${encodeURIComponent(identity.region)}&shard=${i}&count=${count}${identity.accountId ? `&account=${encodeURIComponent(identity.accountId)}` : ''}&auto=1`);
